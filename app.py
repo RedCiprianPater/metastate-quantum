@@ -61,17 +61,43 @@ def qpanda_available():
 def run_on_origin(W, n_qubits, shots):
     """
     Run the process-matrix circuit on Origin's QPanda stack.
-    Uses the local QPanda simulator (real, no credentials). Encodes W the same way
-    as the IBM path (RY from row magnitudes + CX entangling layer) so results are
-    comparable across backends. Real Wukong hardware would dispatch via Origin Cloud
-    when ORIGIN_API_KEY is set (documented; not active without the key).
+
+    If ORIGIN_API_KEY is set, dispatch to the real Origin Wukong QPU via
+    pyqpanda3.qcloud.QCloudService. Otherwise run the local QPanda CPU simulator
+    (real simulation, no credentials). Same encoding as the IBM path (RY from row
+    magnitudes + CX entangling layer) so results are comparable across backends.
     """
+    # ---- real Wukong hardware path ----
+    if HAVE_ORIGIN_HW:
+        try:
+            from pyqpanda3.qcloud import QCloudService
+            from pyqpanda3.core import QCircuit, QProg, RY, CNOT, measure
+            circuit = QCircuit()
+            for i in range(n_qubits):
+                row = W[i % len(W)]
+                s = sum(abs(v) for v in row) or 1.0
+                theta = math.pi * (abs(row[i % len(row)]) / s)
+                circuit << RY(i, theta)
+            for i in range(n_qubits - 1):
+                circuit << CNOT(i, i + 1)
+            prog = QProg(); prog << circuit
+            for i in range(n_qubits):
+                prog << measure(i, i)
+            svc = QCloudService(ORIGIN_API_KEY)
+            backend = svc.backend("origin_wukong")
+            job = backend.run(prog, shots)
+            counts = job.result().get_counts()
+            total = sum(counts.values()) or 1
+            return {k: v / total for k, v in counts.items()}, "origin_wukong (real QPU)"
+        except Exception as e:
+            # fall through to local simulator on any cloud error
+            pass
+
+    # ---- local QPanda simulator path (no credentials) ----
     try:
         import pyqpanda3.core as pq
     except Exception:
         import pyqpanda as pq  # fallback to QPanda2 API
-
-    # QPanda3 and QPanda2 have slightly different APIs; handle the common path.
     try:
         machine = pq.CPUQVM()
         machine.init_qvm()
@@ -185,9 +211,10 @@ def route(r: RouteReq, x_worker_secret: str = Header(None)):
     if backend == "origin":
         try:
             probs, used = run_on_origin(r.process_matrix, n, shots)
+            real = "real QPU" in used
             return {"backend_requested": r.backend, "backend_used": used,
-                    "hardware_status": "live (Origin QPanda simulator)"
-                        if not HAVE_ORIGIN_HW else "origin (sim; HW key present)",
+                    "hardware_status": "live (Origin Wukong QPU)" if real
+                        else "live (Origin QPanda simulator)",
                     "stack": "Origin Pilot / QPanda3 (USTC, open-source)",
                     "dimension": n, "shots": shots, "measurement_probabilities": probs}
         except Exception as e:
