@@ -3,7 +3,7 @@ services:
     name: metastate-quantum
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: "pip install -r requirements.txt && (pip install pyqpanda3 || echo 'pyqpanda3 unavailable on this platform; Origin backend will report unavailable and fall back')"
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
@@ -11,6 +11,8 @@ services:
       - key: IBM_QUANTUM_TOKEN
         sync: false
       - key: IBM_QUANTUM_CRN
+        sync: false
+      - key: ORIGIN_API_KEY
         sync: false
       - key: WORKER_SHARED_SECRET
         sync: false
