@@ -3,4 +3,3 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 qiskit==1.2.4
 qiskit-ibm-runtime==0.30.0
-qiskit-aer==0.15.1
