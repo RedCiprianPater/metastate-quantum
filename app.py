@@ -28,7 +28,13 @@ IBM_CRN    = os.environ.get("IBM_QUANTUM_CRN", "")
 SHARED     = os.environ.get("WORKER_SHARED_SECRET", "")
 HAVE_IBM   = bool(IBM_TOKEN and IBM_CRN)
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.0.0")
+# Origin Quantum (China, USTC) — open-source Origin Pilot / QPanda3 stack.
+# pyqpanda3 runs a REAL local simulator with no credentials. Real Wukong hardware
+# needs an Origin Cloud API key (set ORIGIN_API_KEY) — documented, not required.
+ORIGIN_API_KEY = os.environ.get("ORIGIN_API_KEY", "")
+HAVE_ORIGIN_HW = bool(ORIGIN_API_KEY)
+
+app = FastAPI(title="METASTATE Quantum Worker", version="1.1.0")
 
 # ---- lazy Qiskit import so the service boots even without the heavy deps ----
 _service = None
@@ -39,6 +45,52 @@ def ibm_service():
         _service = QiskitRuntimeService(channel="ibm_quantum_platform",
                                         token=IBM_TOKEN, instance=IBM_CRN)
     return _service
+
+# ---- QPanda3 (Origin Pilot) runner — lazy import, local simulator ----
+def qpanda_available():
+    try:
+        import pyqpanda3  # noqa
+        return True
+    except Exception:
+        try:
+            import pyqpanda  # noqa  (older API)
+            return True
+        except Exception:
+            return False
+
+def run_on_origin(W, n_qubits, shots):
+    """
+    Run the process-matrix circuit on Origin's QPanda stack.
+    Uses the local QPanda simulator (real, no credentials). Encodes W the same way
+    as the IBM path (RY from row magnitudes + CX entangling layer) so results are
+    comparable across backends. Real Wukong hardware would dispatch via Origin Cloud
+    when ORIGIN_API_KEY is set (documented; not active without the key).
+    """
+    try:
+        import pyqpanda3.core as pq
+    except Exception:
+        import pyqpanda as pq  # fallback to QPanda2 API
+
+    # QPanda3 and QPanda2 have slightly different APIs; handle the common path.
+    try:
+        machine = pq.CPUQVM()
+        machine.init_qvm()
+        qubits = machine.qAlloc_list(n_qubits)
+        cbits = machine.cAlloc_list(n_qubits)
+        prog = pq.QProg()
+        for i in range(n_qubits):
+            row = W[i % len(W)]
+            s = sum(abs(v) for v in row) or 1.0
+            theta = math.pi * (abs(row[i % len(row)]) / s)
+            prog << pq.RY(qubits[i], theta)
+        for i in range(n_qubits - 1):
+            prog << pq.CNOT(qubits[i], qubits[i + 1])
+        prog << pq.measure_all(qubits, cbits)
+        result = machine.run_with_configuration(prog, cbits, shots)
+        total = sum(result.values()) or 1
+        return {k: v / total for k, v in result.items()}, "qpanda-cpu-simulator"
+    except Exception as e:
+        raise RuntimeError(f"qpanda run failed: {e}")
 
 # ----------------------------------------------------------------- models
 class RouteReq(BaseModel):
@@ -113,7 +165,11 @@ def run_on_ibm(W, n_qubits, shots, backend_name):
 # ----------------------------------------------------------------- routes
 @app.get("/")
 def health():
-    return {"service": "metastate-quantum", "ibm_configured": HAVE_IBM,
+    return {"service": "metastate-quantum", "version": "1.1.0",
+            "ibm_configured": HAVE_IBM,
+            "qpanda_available": qpanda_available(),
+            "origin_hw_configured": HAVE_ORIGIN_HW,
+            "backends": ["auto", "simulator", "origin"] + (["ibm"] if HAVE_IBM else []),
             "mode_default": "ibm" if HAVE_IBM else "simulator"}
 
 @app.post("/route")
@@ -123,10 +179,28 @@ def route(r: RouteReq, x_worker_secret: str = Header(None)):
         raise HTTPException(401, "bad worker secret")
     n = min(max(len(r.process_matrix), 1), 5)   # cap qubits for the free plan
     shots = min(max(r.shots, 64), 4096)
-    want_real = HAVE_IBM and r.backend != "simulator"
+    backend = (r.backend or "auto").lower()
+
+    # explicit Origin/QPanda backend
+    if backend == "origin":
+        try:
+            probs, used = run_on_origin(r.process_matrix, n, shots)
+            return {"backend_requested": r.backend, "backend_used": used,
+                    "hardware_status": "live (Origin QPanda simulator)"
+                        if not HAVE_ORIGIN_HW else "origin (sim; HW key present)",
+                    "stack": "Origin Pilot / QPanda3 (USTC, open-source)",
+                    "dimension": n, "shots": shots, "measurement_probabilities": probs}
+        except Exception as e:
+            probs = simulate(r.process_matrix, n, shots)
+            return {"backend_requested": r.backend, "backend_used": "aer-fallback",
+                    "hardware_status": "simulator (qpanda unavailable)",
+                    "error": str(e)[:200], "dimension": n, "shots": shots,
+                    "measurement_probabilities": probs}
+
+    want_real = HAVE_IBM and backend != "simulator"
     try:
         if want_real:
-            probs, backend_used, job_id = run_on_ibm(r.process_matrix, n, shots, r.backend)
+            probs, backend_used, job_id = run_on_ibm(r.process_matrix, n, shots, backend)
             return {"backend_requested": r.backend, "backend_used": backend_used,
                     "hardware_status": "live (IBM Quantum)", "job_id": job_id,
                     "dimension": n, "shots": shots, "measurement_probabilities": probs}
@@ -137,7 +211,6 @@ def route(r: RouteReq, x_worker_secret: str = Header(None)):
                     "hardware_status": "simulator", "dimension": n, "shots": shots,
                     "measurement_probabilities": probs}
     except Exception as e:
-        # never 500 the caller: fall back to simulation and report why
         probs = simulate(r.process_matrix, n, shots)
         return {"backend_requested": r.backend, "backend_used": "aer-simulator (fallback)",
                 "hardware_status": "simulator (hardware error)", "error": str(e)[:200],
