@@ -17,6 +17,17 @@ pydantic==2.9.2
 qiskit==1.2.4
 qiskit-ibm-runtime==0.30.0
 
+# --- IBM transitive pins (added 2026-08 · unblocks Render sdist build) ------
+# Without these, pip's resolver backtracks through ibm-platform-services
+# looking for a version whose declared dep tree is fully satisfiable. It
+# ends up on 0.55.2 (sdist-only for py-generic), whose setup.py does
+# `import pkg_resources` and fails inside pip's isolated build env because
+# recent setuptools (>= 70) doesn't ship pkg_resources by default in build
+# isolation. Pinning to the wheel versions pip was already willing to accept
+# (visible in the failed build log) skips the broken sdist entirely.
+ibm-cloud-sdk-core==3.20.6
+ibm-platform-services==0.56.0
+
 # --- Local Aer simulator (NEW · v1.2.0-osaka) -------------------------------
 # Required for two reasons:
 #   1. The `simulator` backend and universal fallback when a hardware backend
