@@ -71,6 +71,20 @@ HAVE_IBM       = bool(IBM_TOKEN and IBM_CRN)
 HAVE_ORIGIN_HW = bool(ORIGIN_API_KEY)
 HAVE_OSAKA_HW  = bool(OSAKA_API_TOKEN and OSAKA_API_URL)
 
+# The qiskit-ibm-runtime package is a lazy import — the module can be absent
+# entirely (see the ATTENTION note in requirements.txt) and the worker will
+# still start. But if IBM_TOKEN/IBM_CRN are set while the package isn't
+# installed, HAVE_IBM would be True and a caller hitting the ibm backend
+# would crash with ImportError. Probe once at startup and demote HAVE_IBM
+# to False if the module isn't reachable.
+try:
+    import qiskit_ibm_runtime as _ibm_probe  # noqa: F401
+    IBM_MODULE_INSTALLED = True
+except Exception:
+    IBM_MODULE_INSTALLED = False
+if HAVE_IBM and not IBM_MODULE_INSTALLED:
+    HAVE_IBM = False  # env said yes, but the wheel isn't here — degrade quietly
+
 app = FastAPI(title="METASTATE Quantum Worker", version="1.2.0-osaka")
 
 # =============================================================================
@@ -422,6 +436,7 @@ def health():
     return {"service": "metastate-quantum",
             "version": "1.2.0-osaka",
             "ibm_configured":         HAVE_IBM,
+            "ibm_module_installed":   IBM_MODULE_INSTALLED,
             "origin_hw_configured":   HAVE_ORIGIN_HW,
             "qpanda_available":       qpanda_available(),
             "osaka_hw_configured":    HAVE_OSAKA_HW,
