@@ -8,11 +8,27 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.9"
+
+      # ---- IBM Quantum (Qiskit Runtime) ----
       - key: IBM_QUANTUM_TOKEN
-        sync: false
+        sync: false                    # 44-char API key from quantum.cloud.ibm.com dashboard
       - key: IBM_QUANTUM_CRN
-        sync: false
+        sync: false                    # crn:v1:bluemix:public:quantum-computing:<region>:a/<acct>:<inst>::
+
+      # ---- Origin Wukong (Origin Cloud, USTC) ----
       - key: ORIGIN_API_KEY
-        sync: false
+        sync: false                    # optional; without it the Origin backend runs the local QPanda sim
+
+      # ---- Osaka University · OQTOPUS Cloud · ¹⁷¹Yb⁺ ion trap ----
+      - key: OSAKA_API_TOKEN
+        sync: false                    # OQTOPUS Cloud token from the Osaka QIQB user portal
+      - key: OSAKA_API_URL
+        sync: false                    # OQTOPUS Cloud base URL from Osaka QIQB registration
+      - key: OSAKA_DEVICE_ID
+        value: "osaka_iontrap_yb171"   # device id issued by QIQB at registration; override if needed
+
+      # ---- Shared secrets (auth gates) ----
       - key: WORKER_SHARED_SECRET
-        sync: false
+        sync: false                    # METASTATE Space sends this in x-worker-secret on /route
+      - key: CHAINSTATE_SHARED_SECRET
+        sync: false                    # CHAINSTATE Cloudflare worker sends this in x-chainstate-token on /chainstate/route

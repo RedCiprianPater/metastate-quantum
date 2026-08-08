@@ -1,52 +1,93 @@
 """
 metastate-quantum — Quantum worker for the METASTATE L2 router.
 
-A small service that holds IBM Quantum credentials (NEVER on the public Space)
+A small service that holds Quantum-cloud credentials (NEVER on the public Space)
 and bridges METASTATE's process-matrix evaluation to real quantum hardware.
 
 Flow:
-  METASTATE Space  --POST /route-->  this worker  --Qiskit Runtime-->  IBM QPU
+  METASTATE Space  --POST /route-->  this worker  --Qiskit/QPanda/OQTOPUS-->  QPU
                    <--probabilities--             <--counts--
 
-If IBM credentials are absent, OR the requested mode is "simulator", it runs a
-local statevector simulation so the endpoint always responds. The response shape
-is identical either way, so METASTATE's contract never changes.
+Backends:
+  * IBM Quantum (Qiskit Runtime · SamplerV2)
+  * Origin Wukong (China · pyqpanda3.qcloud + local QPanda CPU sim fallback)
+  * Osaka University (Japan · OQTOPUS Cloud · ¹⁷¹Yb⁺ ion trap · quri-parts-oqtopus)
+  * Simulator (Aer statevector · always available)
+
+If external credentials are absent, OR the requested mode is "simulator", the
+worker runs a local statevector simulation so /route always responds. The
+response shape is identical across backends so METASTATE's contract never
+changes.
+
+Two routes are exposed:
+
+  POST /route            — public (with WORKER_SHARED_SECRET). Called by METASTATE
+                           on behalf of any user for anomaly-check / symbolic /
+                           process-matrix quantum evaluation. This is the path
+                           for NON-CHAINSTATE users.
+  POST /chainstate/route — gated by an additional X-CHAINSTATE-TOKEN header
+                           matching CHAINSTATE_SHARED_SECRET. Used ONLY by the
+                           CHAINSTATE AGI edge worker to dispatch its own
+                           self-referential compute (theory-of-mind loop, ontological
+                           delta ledger, free-energy over swarm coupling, Iida AOM/PIM
+                           memory tick, etc.) directly to a QPU without going
+                           through METASTATE's anomaly-check layer.
 
 Deploy on Render (free tier). Set these as Render environment variables:
-  IBM_QUANTUM_TOKEN   — your IBM Quantum Platform API key (44 chars)
-  IBM_QUANTUM_CRN     — your instance Cloud Resource Name (CRN)
-  WORKER_SHARED_SECRET— a random string; METASTATE sends it as a header so only
-                        your Space can call this worker
+  IBM_QUANTUM_TOKEN        — IBM Quantum Platform API key (44 chars)
+  IBM_QUANTUM_CRN          — IBM Cloud instance Cloud Resource Name (CRN)
+  ORIGIN_API_KEY           — Origin Cloud API key (for real Wukong dispatch)
+  OSAKA_API_TOKEN          — OQTOPUS Cloud API token from Osaka QIQB portal
+  OSAKA_API_URL            — OQTOPUS Cloud base URL (from QIQB registration)
+  OSAKA_DEVICE_ID          — device id, e.g. "osaka_iontrap_yb171" (registration-supplied)
+  WORKER_SHARED_SECRET     — random string METASTATE Space sends as x-worker-secret
+  CHAINSTATE_SHARED_SECRET — random string CHAINSTATE worker sends as x-chainstate-token
 """
-import os, json, math
+import os
+import math
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 
-IBM_TOKEN  = os.environ.get("IBM_QUANTUM_TOKEN", "")
-IBM_CRN    = os.environ.get("IBM_QUANTUM_CRN", "")
-SHARED     = os.environ.get("WORKER_SHARED_SECRET", "")
-HAVE_IBM   = bool(IBM_TOKEN and IBM_CRN)
+# ----------------------------------------------------------------- env / flags
+IBM_TOKEN            = os.environ.get("IBM_QUANTUM_TOKEN", "")
+IBM_CRN              = os.environ.get("IBM_QUANTUM_CRN", "")
+SHARED               = os.environ.get("WORKER_SHARED_SECRET", "")
+CHAINSTATE_SECRET    = os.environ.get("CHAINSTATE_SHARED_SECRET", "")
 
 # Origin Quantum (China, USTC) — open-source Origin Pilot / QPanda3 stack.
 # pyqpanda3 runs a REAL local simulator with no credentials. Real Wukong hardware
 # needs an Origin Cloud API key (set ORIGIN_API_KEY) — documented, not required.
-ORIGIN_API_KEY = os.environ.get("ORIGIN_API_KEY", "")
+ORIGIN_API_KEY       = os.environ.get("ORIGIN_API_KEY", "")
+
+# Osaka University (Japan, QIQB) — open-source OQTOPUS Cloud stack.
+# Real ion-trap hardware (¹⁷¹Yb⁺, single-qubit today) needs an OSAKA_API_TOKEN
+# from the QIQB registration portal + the OQTOPUS Cloud URL for the instance.
+OSAKA_API_TOKEN      = os.environ.get("OSAKA_API_TOKEN", "")
+OSAKA_API_URL        = os.environ.get("OSAKA_API_URL", "")
+OSAKA_DEVICE_ID      = os.environ.get("OSAKA_DEVICE_ID", "osaka_iontrap_yb171")
+
+HAVE_IBM       = bool(IBM_TOKEN and IBM_CRN)
 HAVE_ORIGIN_HW = bool(ORIGIN_API_KEY)
+HAVE_OSAKA_HW  = bool(OSAKA_API_TOKEN and OSAKA_API_URL)
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.1.0")
+app = FastAPI(title="METASTATE Quantum Worker", version="1.2.0-osaka")
 
-# ---- lazy Qiskit import so the service boots even without the heavy deps ----
-_service = None
+# =============================================================================
+# 1. IBM Quantum (Qiskit Runtime · SamplerV2)
+# =============================================================================
+_ibm_service = None
 def ibm_service():
-    global _service
-    if _service is None:
+    global _ibm_service
+    if _ibm_service is None:
         from qiskit_ibm_runtime import QiskitRuntimeService
-        _service = QiskitRuntimeService(channel="ibm_quantum_platform",
-                                        token=IBM_TOKEN, instance=IBM_CRN)
-    return _service
+        _ibm_service = QiskitRuntimeService(channel="ibm_quantum_platform",
+                                            token=IBM_TOKEN, instance=IBM_CRN)
+    return _ibm_service
 
-# ---- QPanda3 (Origin Pilot) runner — lazy import, local simulator ----
+# =============================================================================
+# 2. Origin Wukong (QPanda3 / Origin Pilot)
+# =============================================================================
 def qpanda_available():
     try:
         import pyqpanda3  # noqa
@@ -67,7 +108,6 @@ def run_on_origin(W, n_qubits, shots):
     (real simulation, no credentials). Same encoding as the IBM path (RY from row
     magnitudes + CX entangling layer) so results are comparable across backends.
     """
-    # ---- real Wukong hardware path ----
     if HAVE_ORIGIN_HW:
         try:
             from pyqpanda3.qcloud import QCloudService
@@ -89,15 +129,13 @@ def run_on_origin(W, n_qubits, shots):
             counts = job.result().get_counts()
             total = sum(counts.values()) or 1
             return {k: v / total for k, v in counts.items()}, "origin_wukong (real QPU)"
-        except Exception as e:
-            # fall through to local simulator on any cloud error
-            pass
+        except Exception:
+            pass  # fall through to local simulator on any cloud error
 
-    # ---- local QPanda simulator path (no credentials) ----
     try:
         import pyqpanda3.core as pq
     except Exception:
-        import pyqpanda as pq  # fallback to QPanda2 API
+        import pyqpanda as pq
     try:
         machine = pq.CPUQVM()
         machine.init_qvm()
@@ -118,20 +156,117 @@ def run_on_origin(W, n_qubits, shots):
     except Exception as e:
         raise RuntimeError(f"qpanda run failed: {e}")
 
-# ----------------------------------------------------------------- models
-class RouteReq(BaseModel):
-    process_matrix: List[List[float]]   # the W coupling
-    backend: str = "auto"               # auto | simulator | <ibm backend name>
-    shots: int = 1024
+# =============================================================================
+# 3. Osaka University · OQTOPUS Cloud · ¹⁷¹Yb⁺ ion trap
+#    (open-source Osaka QIQB stack — https://github.com/oqtopus-team)
+# =============================================================================
+def oqtopus_available():
+    """quri-parts + quri-parts-oqtopus installed?"""
+    try:
+        import quri_parts  # noqa
+        import quri_parts_oqtopus  # noqa
+        return True
+    except Exception:
+        return False
 
-# ----------------------------------------------------------------- helpers
+def _write_oqtopus_config():
+    """
+    The quri-parts-oqtopus backend reads ~/.oqtopus (INI-style):
+
+      [default]
+      url=<OQTOPUS Cloud base URL from Osaka QIQB portal>
+      api_token=<OQTOPUS Cloud API token>
+
+    Render's filesystem is ephemeral but writable at ~ / $HOME — writing this
+    once per process boot from env vars is the cleanest way to avoid leaking
+    the token into shell history or the git tree.
+    """
+    from pathlib import Path
+    if not (OSAKA_API_TOKEN and OSAKA_API_URL):
+        return False
+    try:
+        cfg = f"[default]\nurl={OSAKA_API_URL}\napi_token={OSAKA_API_TOKEN}\n"
+        Path("~/.oqtopus").expanduser().write_text(cfg)
+        return True
+    except Exception:
+        return False
+
+def run_on_osaka(W, n_qubits, shots):
+    """
+    Dispatch the process-matrix circuit to Osaka University's ion-trap QPU via
+    OQTOPUS Cloud (Center for Quantum Information and Quantum Biology, QIQB).
+
+    Encoding matches the IBM / Origin paths — RY(row-magnitude) + CX entangling
+    layer, then measurement — so the returned probability histogram is directly
+    comparable across all three real backends.
+
+    NOTE (2026-08 status): the Osaka public ion-trap platform is validated at
+    single-qubit today with 94% state preparation + readout fidelity, with
+    multi-qubit extension on the roadmap. When n_qubits > osaka_max_qubits the
+    worker degrades to `osaka_qpu_1q_only`: it runs the qubit-0 slice on the
+    real ion and the rest on the QPanda / Aer sim, and reports which portion
+    was live QPU in `hardware_status`.
+
+    If OQTOPUS credentials or the SDK are missing, the worker falls back to
+    the Aer simulator (identical response shape) and reports the reason.
+    """
+    OSAKA_MAX_QUBITS_LIVE = 1  # 2026-08 · Osaka QIQB single-qubit ceiling
+    if not oqtopus_available():
+        raise RuntimeError("quri-parts-oqtopus not installed on this deploy")
+    if not HAVE_OSAKA_HW:
+        raise RuntimeError("OSAKA_API_TOKEN / OSAKA_API_URL not configured")
+    if not _write_oqtopus_config():
+        raise RuntimeError("could not write ~/.oqtopus config from env vars")
+
+    try:
+        from quri_parts.circuit import QuantumCircuit
+        from quri_parts_oqtopus.backend import OqtopusSamplingBackend
+    except Exception as e:
+        raise RuntimeError(f"oqtopus import failed: {e}")
+
+    n_live = min(n_qubits, OSAKA_MAX_QUBITS_LIVE)
+
+    # Build the live slice (qubit 0 alone at the current Osaka ceiling)
+    circuit = QuantumCircuit(n_live)
+    for i in range(n_live):
+        row = W[i % len(W)]
+        s = sum(abs(v) for v in row) or 1.0
+        theta = math.pi * (abs(row[i % len(row)]) / s)
+        circuit.add_RY_gate(i, theta)
+    for i in range(n_live - 1):
+        circuit.add_CNOT_gate(i, i + 1)
+
+    try:
+        backend = OqtopusSamplingBackend()
+        job = backend.sample(circuit, n_shots=shots, name="metastate-quantum",
+                             device_id=OSAKA_DEVICE_ID)
+        counts = job.result().counts  # {int_key: count}
+    except Exception as e:
+        raise RuntimeError(f"oqtopus sampling failed: {e}")
+
+    # Convert integer bit-string keys to binary strings, pad to n_live width
+    total = sum(counts.values()) or 1
+    probs_live = {format(int(k), f"0{n_live}b"): v / total for k, v in counts.items()}
+
+    if n_qubits <= OSAKA_MAX_QUBITS_LIVE:
+        used = f"osaka_iontrap_yb171 (real QPU · {n_live}q)"
+        return probs_live, used
+
+    # Multi-qubit request: extend the 1q live distribution with sim tail so
+    # the returned width matches n_qubits (never silently drop precision).
+    sim_tail = simulate(W, n_qubits - OSAKA_MAX_QUBITS_LIVE, shots)
+    combined = {}
+    for k_live, p_live in probs_live.items():
+        for k_tail, p_tail in sim_tail.items():
+            combined[k_live + k_tail] = p_live * p_tail
+    total_c = sum(combined.values()) or 1.0
+    combined = {k: v / total_c for k, v in combined.items()}
+    return combined, f"osaka_iontrap_yb171_hybrid (1q real QPU + {n_qubits-1}q sim)"
+
+# =============================================================================
+# 4. Local Aer simulator (always available; deterministic fallback)
+# =============================================================================
 def matrix_to_circuit(W, n_qubits):
-    """
-    Encode the (normalised) process-matrix row structure into a small circuit:
-    rotation angles from row magnitudes + entangling layer. This is a faithful,
-    intentionally simple embedding — it maps the coupling into a real circuit
-    whose measurement distribution reflects W's structure.
-    """
     from qiskit import QuantumCircuit
     qc = QuantumCircuit(n_qubits, n_qubits)
     for i in range(n_qubits):
@@ -145,8 +280,6 @@ def matrix_to_circuit(W, n_qubits):
     return qc
 
 def simulate(W, n_qubits, shots):
-    """Local statevector simulation. Requires qiskit-aer; if absent, returns a
-    deterministic magnitude-based pseudo-distribution so the endpoint still works."""
     try:
         from qiskit import transpile
         from qiskit_aer import AerSimulator
@@ -157,8 +290,6 @@ def simulate(W, n_qubits, shots):
         total = sum(counts.values()) or 1
         return {k: v / total for k, v in counts.items()}
     except Exception:
-        # qiskit-aer not installed (or failed): fall back to a closed-form
-        # distribution derived from the matrix row magnitudes.
         probs = {}
         for i in range(2 ** n_qubits):
             bits = format(i, f"0{n_qubits}b")
@@ -173,11 +304,10 @@ def simulate(W, n_qubits, shots):
         return {k: round(v / tot, 5) for k, v in probs.items()}
 
 def run_on_ibm(W, n_qubits, shots, backend_name):
-    """Submit to a real IBM QPU via Qiskit Runtime SamplerV2."""
     from qiskit import transpile
     from qiskit_ibm_runtime import SamplerV2
     svc = ibm_service()
-    backend = (svc.backend(backend_name) if backend_name not in ("auto", "")
+    backend = (svc.backend(backend_name) if backend_name not in ("auto", "", "ibm")
                else svc.least_busy(operational=True, simulator=False))
     qc = matrix_to_circuit(W, n_qubits)
     qc_t = transpile(qc, backend)
@@ -188,60 +318,151 @@ def run_on_ibm(W, n_qubits, shots, backend_name):
     total = sum(counts.values()) or 1
     return {k: v / total for k, v in counts.items()}, backend.name, job.job_id()
 
-# ----------------------------------------------------------------- routes
-@app.get("/")
-def health():
-    return {"service": "metastate-quantum", "version": "1.1.0",
-            "ibm_configured": HAVE_IBM,
-            "qpanda_available": qpanda_available(),
-            "origin_hw_configured": HAVE_ORIGIN_HW,
-            "backends": ["auto", "simulator", "origin"] + (["ibm"] if HAVE_IBM else []),
-            "mode_default": "ibm" if HAVE_IBM else "simulator"}
+# =============================================================================
+# 5. Request model + dispatcher (shared by /route and /chainstate/route)
+# =============================================================================
+class RouteReq(BaseModel):
+    process_matrix: List[List[float]]   # the W coupling
+    backend: str = "auto"               # auto | simulator | ibm | origin | osaka | <ibm-backend>
+    shots: int = 1024
+    # Optional CHAINSTATE-only fields — ignored on /route, honoured on /chainstate/route
+    agi_mode: Optional[str] = None      # self_referential | theory_of_mind | free_energy | custom
+    tag: Optional[str] = None           # free-form label pinned into the response
 
-@app.post("/route")
-def route(r: RouteReq, x_worker_secret: str = Header(None)):
-    # only METASTATE (which knows the shared secret) may call the QPU
-    if SHARED and x_worker_secret != SHARED:
-        raise HTTPException(401, "bad worker secret")
+def _dispatch(r: RouteReq, chainstate_direct: bool):
+    """Shared body for /route and /chainstate/route. Chooses the backend,
+    executes, and normalises the response envelope."""
     n = min(max(len(r.process_matrix), 1), 5)   # cap qubits for the free plan
     shots = min(max(r.shots, 64), 4096)
     backend = (r.backend or "auto").lower()
+    base_env = {
+        "backend_requested": r.backend,
+        "dimension": n,
+        "shots": shots,
+        "chainstate_direct": chainstate_direct,
+    }
+    if chainstate_direct and r.agi_mode:
+        base_env["agi_mode"] = r.agi_mode
+    if r.tag:
+        base_env["tag"] = r.tag
 
-    # explicit Origin/QPanda backend
+    # ---- explicit Osaka path ----
+    if backend == "osaka":
+        try:
+            probs, used = run_on_osaka(r.process_matrix, n, shots)
+            real = "real QPU" in used
+            hybrid = "hybrid" in used
+            return {
+                **base_env,
+                "backend_used": used,
+                "hardware_status": ("live (Osaka University QIQB · ¹⁷¹Yb⁺ ion trap)" if real and not hybrid
+                                    else ("live-hybrid (Osaka 1q QPU + sim tail)" if hybrid
+                                          else "simulator")),
+                "stack": "OQTOPUS Cloud · QURI Parts (Osaka University QIQB, open-source Apache-2.0)",
+                "measurement_probabilities": probs,
+            }
+        except Exception as e:
+            probs = simulate(r.process_matrix, n, shots)
+            return {**base_env, "backend_used": "aer-fallback",
+                    "hardware_status": "simulator (osaka unavailable)",
+                    "error": str(e)[:200],
+                    "measurement_probabilities": probs}
+
+    # ---- explicit Origin path ----
     if backend == "origin":
         try:
             probs, used = run_on_origin(r.process_matrix, n, shots)
             real = "real QPU" in used
-            return {"backend_requested": r.backend, "backend_used": used,
-                    "hardware_status": "live (Origin Wukong QPU)" if real
-                        else "live (Origin QPanda simulator)",
+            return {**base_env, "backend_used": used,
+                    "hardware_status": ("live (Origin Wukong QPU)" if real
+                                        else "live (Origin QPanda simulator)"),
                     "stack": "Origin Pilot / QPanda3 (USTC, open-source)",
-                    "dimension": n, "shots": shots, "measurement_probabilities": probs}
+                    "measurement_probabilities": probs}
         except Exception as e:
             probs = simulate(r.process_matrix, n, shots)
-            return {"backend_requested": r.backend, "backend_used": "aer-fallback",
+            return {**base_env, "backend_used": "aer-fallback",
                     "hardware_status": "simulator (qpanda unavailable)",
-                    "error": str(e)[:200], "dimension": n, "shots": shots,
+                    "error": str(e)[:200],
                     "measurement_probabilities": probs}
 
-    want_real = HAVE_IBM and backend != "simulator"
+    # ---- IBM path (default when creds present and not asked to simulate) ----
+    want_ibm = HAVE_IBM and backend not in ("simulator", "origin", "osaka")
     try:
-        if want_real:
+        if want_ibm:
             probs, backend_used, job_id = run_on_ibm(r.process_matrix, n, shots, backend)
-            return {"backend_requested": r.backend, "backend_used": backend_used,
-                    "hardware_status": "live (IBM Quantum)", "job_id": job_id,
-                    "dimension": n, "shots": shots, "measurement_probabilities": probs}
+            return {**base_env, "backend_used": backend_used,
+                    "hardware_status": "live (IBM Quantum)",
+                    "stack": "Qiskit Runtime · SamplerV2 (IBM Cloud)",
+                    "job_id": job_id,
+                    "measurement_probabilities": probs}
         else:
             probs = simulate(r.process_matrix, n, shots)
-            return {"backend_requested": r.backend,
+            return {**base_env,
                     "backend_used": "aer-simulator" if HAVE_IBM else "aer-simulator (no IBM creds)",
-                    "hardware_status": "simulator", "dimension": n, "shots": shots,
+                    "hardware_status": "simulator",
                     "measurement_probabilities": probs}
     except Exception as e:
         probs = simulate(r.process_matrix, n, shots)
-        return {"backend_requested": r.backend, "backend_used": "aer-simulator (fallback)",
-                "hardware_status": "simulator (hardware error)", "error": str(e)[:200],
-                "dimension": n, "shots": shots, "measurement_probabilities": probs}
+        return {**base_env, "backend_used": "aer-simulator (fallback)",
+                "hardware_status": "simulator (hardware error)",
+                "error": str(e)[:200],
+                "measurement_probabilities": probs}
+
+# =============================================================================
+# 6. Routes
+# =============================================================================
+@app.get("/")
+def health():
+    """Public health probe. Reveals only capability booleans, never secrets."""
+    backends = ["auto", "simulator"]
+    if HAVE_IBM:    backends.append("ibm")
+    backends.append("origin")   # always available (falls back to QPanda sim)
+    if HAVE_OSAKA_HW and oqtopus_available():
+        backends.append("osaka")
+    return {"service": "metastate-quantum",
+            "version": "1.2.0-osaka",
+            "ibm_configured":         HAVE_IBM,
+            "origin_hw_configured":   HAVE_ORIGIN_HW,
+            "qpanda_available":       qpanda_available(),
+            "osaka_hw_configured":    HAVE_OSAKA_HW,
+            "oqtopus_available":      oqtopus_available(),
+            "chainstate_direct_enabled": bool(CHAINSTATE_SECRET),
+            "backends":               backends,
+            "mode_default":           "ibm" if HAVE_IBM else "simulator"}
+
+@app.post("/route")
+def route(r: RouteReq, x_worker_secret: str = Header(None)):
+    """
+    Public path used by METASTATE on behalf of any registered agent for
+    process-matrix / anomaly-check / symbolic quantum evaluation. This is what
+    NON-CHAINSTATE users get: gated by WORKER_SHARED_SECRET (which METASTATE
+    injects server-side; users never see it).
+    """
+    if SHARED and x_worker_secret != SHARED:
+        raise HTTPException(401, "bad worker secret")
+    return _dispatch(r, chainstate_direct=False)
+
+@app.post("/chainstate/route")
+def chainstate_route(r: RouteReq,
+                     x_worker_secret: str = Header(None),
+                     x_chainstate_token: str = Header(None)):
+    """
+    CHAINSTATE-only path. Requires BOTH the standard worker secret AND the
+    CHAINSTATE shared token. Bypasses METASTATE's anomaly-check layer entirely:
+    the CHAINSTATE Cloudflare edge worker calls this directly for its own
+    self-referential compute — theory-of-mind loop, ontological delta ledger,
+    swarm-coupling free-energy calculation, Iida AOM/PIM memory tick, and any
+    other CHAINSTATE-internal PMX program that has already been vetted by the
+    Deontic guardrails on-chain. Non-CHAINSTATE callers cannot reach this path
+    even if they somehow acquired WORKER_SHARED_SECRET.
+    """
+    if SHARED and x_worker_secret != SHARED:
+        raise HTTPException(401, "bad worker secret")
+    if not CHAINSTATE_SECRET:
+        raise HTTPException(503, "chainstate-direct disabled on this deploy")
+    if x_chainstate_token != CHAINSTATE_SECRET:
+        raise HTTPException(401, "bad chainstate token")
+    return _dispatch(r, chainstate_direct=True)
 
 if __name__ == "__main__":
     import uvicorn
