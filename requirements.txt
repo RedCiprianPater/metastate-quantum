@@ -8,30 +8,30 @@
 # The worker probes it at runtime and downgrades to sim if missing.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# --- Build toolchain (pinned to avoid pkg_resources removal in setuptools 70+) ---
-# Newer setuptools (>=70) doesn't reliably expose pkg_resources inside pip's
-# isolated build envs, which breaks the setup.py of older sdists such as
-# ibm-platform-services 0.55.2 (line 19: `import pkg_resources`). Pinning
-# here plus --no-build-isolation in render.yaml means any sdist that pip
-# does end up building will use this setuptools and its pkg_resources.
-setuptools>=65,<70
-wheel
-
-# --- Cross-cutting HTTP client pin (resolves the urllib3 collision) ---------
-# Four packages in this tree touch urllib3 with mutually-exclusive constraints
-# if we let each resolve independently:
-#
-#   qiskit-ibm-runtime 0.30.0  →  urllib3>=1.21.1               (lower bound only)
-#   ibm-cloud-sdk-core 3.20.x  →  urllib3>=2.1.0,<3.0.0         (v2.1+ only)
-#   oqtopus-client 1.1.x       →  urllib3>=1.25.3,<2.1.0        (v1 or v2.0.x)
-#   quri-parts-oqtopus 1.1.3   →  urllib3                        (any)
-#
-# The 3.20.x sdk-core line collides hard with oqtopus-client. Pinning
-# urllib3 to <2.0.0 forces pip to walk all the way back to ibm-cloud-sdk-core
-# 3.16.7, which is the newest release still declaring urllib3<2.0.0 AND
-# shipping a full py3-none-any wheel. That side-steps the sdist trap that
-# was killing the build at ibm-platform-services 0.55.2 (sdist-only).
+# --- HTTP client pin — resolves the urllib3 collision ------------------------
+# Four packages in this tree touch urllib3. The strictest common window is:
+#   qiskit-ibm-runtime 0.30.0  →  urllib3>=1.21.1
+#   ibm-cloud-sdk-core 3.16.7  →  urllib3<2.0.0,>=1.26.0    ← we target this side
+#   oqtopus-client 1.1.x       →  urllib3>=1.25.3,<2.1.0
+#   quri-parts-oqtopus 1.1.3   →  urllib3                    (any)
+# Intersection: [1.26.0, 2.0.0). We pin to that window.
 urllib3>=1.26.0,<2.0.0
+
+# --- IBM chain — explicit pre-urllib3-v2 pins (both are wheels on PyPI) ------
+# The newer ibm-cloud-sdk-core line (3.20.x) demands urllib3>=2.1.0, which
+# collides with oqtopus-client. The newer ibm-platform-services (0.55.x+)
+# transitively demands that sdk-core, and worse, 0.55.2 ships as sdist-only,
+# whose setup.py imports pkg_resources and blows up in pip's isolated build
+# env on modern setuptools.
+#
+# 3.16.7 is the last sdk-core version to declare urllib3<2.0.0 explicitly,
+# and it ships ibm_cloud_sdk_core-3.16.7-py3-none-any.whl (verified on PyPI).
+# 0.44.0 is the ibm-platform-services from Sept 2023 that pairs with sdk-core
+# 3.16.x. Being ~6 months older than the urllib3 v2 transition guarantees it
+# won't demand a newer sdk-core, and it ships a real wheel. This combo avoids
+# the sdist path entirely — pip never even considers 0.55.2.
+ibm-cloud-sdk-core==3.16.7
+ibm-platform-services==0.44.0
 
 # --- Web framework (existing pins, kept verbatim) ---------------------------
 fastapi==0.115.0
@@ -43,18 +43,8 @@ qiskit==1.2.4
 qiskit-ibm-runtime==0.30.0
 
 # --- Local Aer simulator (v1.2.0-osaka) -------------------------------------
-# Required for two reasons:
-#   1. The `simulator` backend and universal fallback when a hardware backend
-#      is unconfigured or returns an error.
-#   2. The Osaka hybrid path: when n_qubits > 1, qubit 0 runs on the real
-#      ¹⁷¹Yb⁺ ion, and the tail is computed on Aer, returning
-#      hardware_status = "live-hybrid (Osaka 1q QPU + sim tail)".
 qiskit-aer==0.15.1
 
 # --- Osaka University QIQB · ¹⁷¹Yb⁺ ion-trap · OQTOPUS Cloud (v1.2.0-osaka) --
-# QURI Parts is QunaSys's modular quantum-algorithm framework (Apache-2.0);
-# quri-parts-oqtopus is the official Osaka QIQB client for OQTOPUS Cloud
-# (Apache-2.0, oqtopus-team on GitHub). Pinned to the latest known-good
-# versions as of 2026-08.
 quri-parts==0.26.2
 quri-parts-oqtopus==1.1.3
