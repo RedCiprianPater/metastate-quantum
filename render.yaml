@@ -9,6 +9,10 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.9"
 
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.7.7 quantum backends (unchanged from previous deploy)
+      # ═════════════════════════════════════════════════════════════════════
+
       # ---- IBM Quantum (Qiskit Runtime) ----
       - key: IBM_QUANTUM_TOKEN
         sync: false                    # 44-char API key from quantum.cloud.ibm.com dashboard
@@ -32,3 +36,61 @@ services:
         sync: false                    # METASTATE Space sends this in x-worker-secret on /route
       - key: CHAINSTATE_SHARED_SECRET
         sync: false                    # CHAINSTATE Cloudflare worker sends this in x-chainstate-token on /chainstate/route
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.7.8 perception module additions (Paper VIII)
+      # All optional; endpoints degrade gracefully when absent.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Supabase (source of truth for priors + audit trails) ----
+      # Tables live in an isolated schema (chainstate_perception) — nothing
+      # in public / storage / graphql_public / nworobotics is touched.
+      # After running supabase/schema.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_perception
+      - key: SUPABASE_URL
+        sync: false                    # e.g. https://xyzcompany.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false                    # service_role key from Supabase project settings
+      - key: SUPABASE_PERCEPTION_SCHEMA
+        value: "chainstate_perception" # override to "public" only for legacy installs
+
+      # ---- R2 (trained EML tree storage) ----
+      - key: R2_MODELS_BASE_URL
+        sync: false                    # e.g. https://models.chainstate.dev/perception
+                                       # or an R2 public-development URL
+
+      # R2 write credentials (for training pipeline upload) --- only needed
+      # on services that run the training tick, not for read-only inference
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: "chainstate-perception-models"
+
+      # ---- Provenance detection service (chainstate-provenance) ----
+      - key: PROVENANCE_SERVICE_URL
+        sync: false                    # e.g. https://chainstate-provenance.onrender.com
+                                       # if empty, endpoints default to refuse-by-default
+                                       # for meta-layer intake (Paper VIII §8.5)
+      - key: PROVENANCE_SHARED_SECRET
+        sync: false                    # auth for provenance service calls
+
+      # ---- Perception behavior toggles ----
+      - key: PERCEPTION_LOG_LEVEL
+        value: "INFO"
+
+      # ---- Training pipeline env (only used by /perception/train/tick) ----
+      - key: TRAINING_HTTPX_UA
+        value: "chainstate-training/0.7.8 (+https://cpater-chainstate.static.hf.space)"
+      - key: TRAINING_MAX_SAMPLES_PER_TICK
+        value: "500"                   # daily sample budget per corpus
+      - key: TRAINING_ALLOWED_SOURCES
+        value: "dtd,fmd,dcase_free,audioset_free,user_nature_20260810,user_instruments_20260810,user_voices_20260810"
+                                       # comma-separated allowlist of corpora
+                                       # user_* corpora must be uploaded to Supabase
+                                       # perception_priors with source='user_<name>' and
+                                       # human_verified=true beforehand

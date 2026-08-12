@@ -1,0 +1,35 @@
+# v0.7.8 perception module — additional requirements
+#
+# Add these to your existing requirements.txt on metastate-quantum.
+# The quantum dependencies (qiskit, qiskit-aer, qiskit-ibm-runtime,
+# quri-parts-oqtopus, pyqpanda3, etc.) remain unchanged from v0.7.7.
+#
+# All perception deps are optional in the code — the /perception/*
+# endpoints degrade gracefully if any are missing. But you need most of
+# these for the service to actually do useful work.
+
+# Core numerics
+numpy>=1.24,<2.0
+scipy>=1.11
+scikit-learn>=1.3
+
+# Image processing
+Pillow>=10.0
+opencv-python-headless>=4.8
+
+# Audio processing (STFT, wavelet, MFCC, RT60)
+librosa>=0.10
+soundfile>=0.12
+
+# Cloudflare R2 (S3-compatible; for training-side model upload)
+boto3>=1.28
+
+# Supabase Postgres (perception_priors + audit trails)
+supabase>=2.0
+
+# HTTP client (used by provenance-service call + model fetch)
+httpx>=0.25
+
+# Optional: for the training pipeline downloading external corpora
+requests>=2.31
+tqdm>=4.66
