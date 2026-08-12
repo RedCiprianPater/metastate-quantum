@@ -33,6 +33,16 @@ Two routes are exposed:
                            memory tick, etc.) directly to a QPU without going
                            through METASTATE's anomaly-check layer.
 
+v0.7.9 · Paper IX · Cyberspace Census additions (additive · never removes):
+
+  GET  /census/status    — public capability probe (census subsystem state)
+  GET  /census/daily     — internal (X-CHAINSTATE-INTERNAL). Returns latest digest.
+  POST /census/trigger   — internal. Manually run the nightly tick outside cron.
+
+  APScheduler runs run_daily_census() nightly at 05:00 UTC when CENSUS_ENABLED
+  and the CHAINSTATE_INTERNAL_TOKEN is set. Failure of the census layer never
+  affects /route or /chainstate/route.
+
 Deploy on Render (free tier). Set these as Render environment variables:
   IBM_QUANTUM_TOKEN        — IBM Quantum Platform API key (44 chars)
   IBM_QUANTUM_CRN          — IBM Cloud instance Cloud Resource Name (CRN)
@@ -42,6 +52,7 @@ Deploy on Render (free tier). Set these as Render environment variables:
   OSAKA_DEVICE_ID          — device id, e.g. "osaka_iontrap_yb171" (registration-supplied)
   WORKER_SHARED_SECRET     — random string METASTATE Space sends as x-worker-secret
   CHAINSTATE_SHARED_SECRET — random string CHAINSTATE worker sends as x-chainstate-token
+  CHAINSTATE_INTERNAL_TOKEN — v0.7.9 · shared with the CF Worker for /census/* endpoints
 """
 import os
 import math
@@ -443,7 +454,11 @@ def health():
             "oqtopus_available":      oqtopus_available(),
             "chainstate_direct_enabled": bool(CHAINSTATE_SECRET),
             "backends":               backends,
-            "mode_default":           "ibm" if HAVE_IBM else "simulator"}
+            "mode_default":           "ibm" if HAVE_IBM else "simulator",
+            # v0.7.9 · census subsystem indicator (details at /census/status)
+            "census_module_installed": HAVE_CENSUS,
+            "census_enabled":          CENSUS_ENABLED,
+            "census_scheduler_running": _is_census_scheduler_running()}
 
 @app.post("/route")
 def route(r: RouteReq, x_worker_secret: str = Header(None)):
@@ -478,6 +493,149 @@ def chainstate_route(r: RouteReq,
     if x_chainstate_token != CHAINSTATE_SECRET:
         raise HTTPException(401, "bad chainstate token")
     return _dispatch(r, chainstate_direct=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7. v0.7.9 · Paper IX · Cyberspace Census
+#
+# All additions below are ADDITIVE. Every prior route, function, import, and
+# behaviour above is preserved verbatim. The census layer:
+#   - imports census_daily.py (fail-soft)
+#   - runs run_daily_census() at 05:00 UTC via APScheduler (fail-soft)
+#   - exposes GET /census/status (public), GET /census/daily (internal),
+#     POST /census/trigger (internal)
+#
+# Failure of the census layer NEVER affects quantum routes.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Census module (fail-soft import)
+try:
+    from census_daily import run_daily_census, latest_digest_from_supabase
+    HAVE_CENSUS = True
+    _census_import_error: Optional[str] = None
+except Exception as _e:
+    HAVE_CENSUS = False
+    _census_import_error = str(_e)
+    async def run_daily_census():  # type: ignore
+        return {"error": "census module not available"}
+    def latest_digest_from_supabase():  # type: ignore
+        return {"error": "census module not available"}
+
+# APScheduler (fail-soft import)
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    HAVE_SCHEDULER = True
+except Exception:
+    HAVE_SCHEDULER = False
+
+CENSUS_ENABLED           = os.environ.get("CENSUS_ENABLED", "true").lower() == "true"
+CHAINSTATE_INTERNAL_TOKEN = os.environ.get("CHAINSTATE_INTERNAL_TOKEN", "")
+
+_census_scheduler = None
+
+def _is_census_scheduler_running() -> bool:
+    """Small helper for the /  health endpoint above. Non-throwing."""
+    try:
+        return bool(_census_scheduler is not None and _census_scheduler.running)
+    except Exception:
+        return False
+
+@app.on_event("startup")
+async def _census_startup():
+    """
+    Wire the 05:00 UTC daily census cron. Fires only when:
+      - census module imported successfully
+      - APScheduler installed
+      - CENSUS_ENABLED is true (default)
+    Otherwise silently no-ops. The service still starts.
+    """
+    global _census_scheduler
+    if not (HAVE_CENSUS and HAVE_SCHEDULER and CENSUS_ENABLED):
+        return
+    try:
+        _census_scheduler = AsyncIOScheduler(timezone="UTC")
+        _census_scheduler.add_job(
+            run_daily_census,
+            CronTrigger(hour=5, minute=0),
+            id="census_daily",
+            misfire_grace_time=3600,
+            coalesce=True,
+            max_instances=1,
+        )
+        _census_scheduler.start()
+    except Exception:
+        _census_scheduler = None
+
+@app.on_event("shutdown")
+async def _census_shutdown():
+    global _census_scheduler
+    if _census_scheduler is not None:
+        try:
+            _census_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _census_scheduler = None
+
+def _check_internal_token(token: Optional[str]):
+    """Gate for /census/daily and /census/trigger. Uses CHAINSTATE_INTERNAL_TOKEN
+    (distinct from CHAINSTATE_SHARED_SECRET so the two responsibilities can be
+    revoked/rotated independently)."""
+    if not CHAINSTATE_INTERNAL_TOKEN:
+        raise HTTPException(503, "CHAINSTATE_INTERNAL_TOKEN not configured on this deploy")
+    if token != CHAINSTATE_INTERNAL_TOKEN:
+        raise HTTPException(401, "bad internal token")
+
+@app.get("/census/status")
+def census_status():
+    """Public read: census subsystem availability + scheduler state.
+    Reveals only booleans and hyperparameters. No secrets, no PII."""
+    return {
+        "census_enabled":            CENSUS_ENABLED,
+        "census_module_installed":   HAVE_CENSUS,
+        "census_module_error":       _census_import_error,
+        "scheduler_installed":       HAVE_SCHEDULER,
+        "scheduler_running":         _is_census_scheduler_running(),
+        "internal_token_configured": bool(CHAINSTATE_INTERNAL_TOKEN),
+        "theta_alert":               float(os.environ.get("CENSUS_THETA_ALERT", "60")),
+        "theta_lockdown":            float(os.environ.get("CENSUS_THETA_LOCKDOWN", "85")),
+        "weights":                   os.environ.get("CENSUS_WEIGHTS", "0.35,0.30,0.20,0.15"),
+        "supabase_schema":           os.environ.get("SUPABASE_CENSUS_SCHEMA", "chainstate_census"),
+        "cron_schedule":             "0 5 * * *  (05:00 UTC daily)",
+        "endpoints": {
+            "read_latest_digest": "GET  /census/daily      (internal · X-CHAINSTATE-INTERNAL)",
+            "trigger_run":        "POST /census/trigger    (internal · X-CHAINSTATE-INTERNAL)",
+            "public_status":      "GET  /census/status     (this endpoint · public)"
+        }
+    }
+
+@app.get("/census/daily")
+def census_daily_read(x_chainstate_internal: str = Header(None)):
+    """
+    Returns the latest completed nightly census digest.
+    Consumed by the CHAINSTATE Cloudflare Worker's 05:00 UTC cron in
+    runCensusDailyTick() (edge-worker.js v0.7.9). Internal-only.
+    """
+    if not HAVE_CENSUS:
+        raise HTTPException(503, f"census module not available: {_census_import_error}")
+    _check_internal_token(x_chainstate_internal)
+    return latest_digest_from_supabase()
+
+@app.post("/census/trigger")
+async def census_trigger(x_chainstate_internal: str = Header(None)):
+    """
+    Manually trigger a census run. Same auth as /census/daily. Blocks until
+    the run completes (~30-90 seconds depending on feed latency) and returns
+    the resulting digest. Useful for testing outside the 05:00 UTC cron.
+    """
+    if not HAVE_CENSUS:
+        raise HTTPException(503, f"census module not available: {_census_import_error}")
+    _check_internal_token(x_chainstate_internal)
+    try:
+        return await run_daily_census()
+    except Exception as e:
+        raise HTTPException(500, f"census run failed: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn

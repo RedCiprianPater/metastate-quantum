@@ -2,7 +2,7 @@
 # metastate-quantum  ·  complete requirements.txt
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# Single Render service, TWO responsibilities merged into one process:
+# Single Render service, THREE responsibilities merged into one process:
 #
 #   1. v0.7.7  Quantum backends  ─ IBM Quantum · Origin Wukong · Osaka QIQB
 #      Endpoints:  /route         (public · WORKER_SHARED_SECRET gate)
@@ -14,11 +14,17 @@
 #                  /perception/status  · /perception/sensors
 #                  /perception/veto/check    · /perception/train/tick
 #
-# Both responsibilities coexist in one FastAPI app: quantum routes and
-# perception routes are independent; failure of one does NOT affect the
-# other. Perception endpoints degrade gracefully when perception-only
-# dependencies (librosa, sklearn, boto3, supabase) are missing --- see
-# the try/except HAVE_* pattern in perception.py.
+#   3. v0.7.9  Cyberspace Census (Paper IX)                        ← NEW
+#      Endpoints:  /census/status   (public)
+#                  /census/daily    (internal · CHAINSTATE_INTERNAL_TOKEN)
+#                  /census/trigger  (internal · CHAINSTATE_INTERNAL_TOKEN)
+#      Cron:       05:00 UTC daily (APScheduler)
+#
+# All three responsibilities coexist in one FastAPI app: quantum routes,
+# perception routes, and census subsystem are independent; failure of one
+# does NOT affect the others. Perception + census endpoints degrade
+# gracefully when their optional deps are missing (try/except HAVE_* pattern
+# in perception.py and app.py).
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # Build & runtime notes for Render:
@@ -93,9 +99,12 @@ soundfile>=0.12            # audio file decode (wav/flac/ogg)
 boto3>=1.28                # S3-compatible client for R2
 
 # ── Supabase Postgres (perception_priors + audit trails) ───────────────────
+# NOTE · v0.7.9 · also used by census_daily.py (chainstate_census schema).
+# Single library serves both perception and census.
 supabase>=2.0              # supports sb.schema("chainstate_perception").table()
 
 # ── HTTP client (provenance-service calls + R2 model fetch) ────────────────
+# NOTE · v0.7.9 · also used by census_daily.py for public-feed fetching.
 httpx>=0.25
 
 # ── Training pipeline (fetch corpora, progress logging) ────────────────────
@@ -104,10 +113,31 @@ tqdm>=4.66                 # progress bars in training logs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# v0.7.9  ·  Cyberspace Census dependencies (Paper IX)
+#
+# Only ONE new library: APScheduler for the 05:00 UTC nightly cron.
+# All other census needs (supabase, httpx) are already installed above
+# for perception, so census reuses the same libraries.
+#
+# If APScheduler installation ever fails, the /census/status endpoint will
+# report `scheduler_installed: false` and quantum + perception continue
+# unaffected. Census endpoints will still respond to manual /census/trigger
+# calls; only the automatic 05:00 UTC tick would be disabled.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── APScheduler (05:00 UTC nightly census tick) ────────────────────────────
+apscheduler>=3.10          # AsyncIOScheduler · CronTrigger
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # End of requirements.txt
 #
 # Verification after deploy:
 #   curl https://metastate-quantum.onrender.com/           → v0.7.7 quantum ok
+#                                                          → census_module_installed: true
+#                                                          → census_scheduler_running: true
 #   curl https://metastate-quantum.onrender.com/perception/status
 #       → { supabase_configured: true, r2_models_url_configured: true, ... }
+#   curl https://metastate-quantum.onrender.com/census/status
+#       → { census_enabled: true, scheduler_running: true, ... }
 # ═══════════════════════════════════════════════════════════════════════════

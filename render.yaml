@@ -94,3 +94,54 @@ services:
                                        # user_* corpora must be uploaded to Supabase
                                        # perception_priors with source='user_<name>' and
                                        # human_verified=true beforehand
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.7.9 · Cyberspace Census additions (Paper IX)
+      # ADDITIVE ONLY. Every v0.7.7 and v0.7.8 setting above is preserved
+      # verbatim. The census subsystem imports census_daily.py inside app.py
+      # (fail-soft) and runs a nightly 05:00 UTC APScheduler cron.
+      # All census endpoints degrade gracefully when any env below is absent.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master enable/disable ----
+      - key: CENSUS_ENABLED
+        value: "true"                  # set to "false" to disable all census
+                                       # functions without removing this section
+
+      # ---- Internal auth (shared with the CF Worker's X-CHAINSTATE-INTERNAL) ----
+      # The Cloudflare Worker's runCensusDailyTick() and pushToWorker() both
+      # send this token in the x-chainstate-internal header. Distinct from
+      # CHAINSTATE_SHARED_SECRET so census can be rotated without disturbing
+      # the /chainstate/route path.
+      - key: CHAINSTATE_INTERNAL_TOKEN
+        sync: false
+
+      # ---- Companion Worker base URL ----
+      # Where run_daily_census() posts its digest at end-of-tick.
+      # Uses default when unset.
+      - key: CHAINSTATE_WORKER_BASE
+        value: "https://chainstate-worker.ciprianpater.workers.dev"
+
+      # ---- Threat surface T(t) hyperparameters (Paper IX §5.1) ----
+      # These must match wrangler.toml on the Cloudflare Worker.
+      - key: CENSUS_THETA_ALERT
+        value: "60"                    # T(t) crossing 60 → posture escalates to alert
+      - key: CENSUS_THETA_LOCKDOWN
+        value: "85"                    # T(t) crossing 85 → meta-layer isolates
+      - key: CENSUS_WEIGHTS
+        value: "0.35,0.30,0.20,0.15"   # w_v, w_a, w_p, w_s · normalized at read
+
+      # ---- Supabase schema (isolated from chainstate_perception) ----
+      # After running chainstate_census_schema.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_census
+      # This is separate from chainstate_perception; both must be exposed
+      # if both v0.7.8 and v0.7.9 features are wanted.
+      - key: SUPABASE_CENSUS_SCHEMA
+        value: "chainstate_census"     # override only for legacy installs
+
+      # ---- NVD API key (optional; higher rate limit) ----
+      # Without it: 5 requests/30s. With it: 50 requests/30s.
+      # Free tier from https://nvd.nist.gov/developers/request-an-api-key
+      - key: NVD_API_KEY
+        sync: false
