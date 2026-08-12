@@ -1,55 +1,113 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# NWO-ASM · metastate-quantum worker · v1.2.0-osaka
-# Complete pinned dependency set. Everything the app.py imports is pinned here.
+# ═══════════════════════════════════════════════════════════════════════════
+# metastate-quantum  ·  complete requirements.txt
+# ═══════════════════════════════════════════════════════════════════════════
 #
-# ATTENTION: qiskit-ibm-runtime is temporarily REMOVED to unblock the Render
-# deploy. Its transitive chain (ibm-cloud-sdk-core, ibm-platform-services)
-# demands urllib3>=2.1.0 in the versions that ship as wheels on public PyPI,
-# and the older versions that would accept urllib3<2.0.0 are sdist-only and
-# fail to build inside pip's isolated build environment with modern setuptools
-# (ModuleNotFoundError: pkg_resources). Fixing that requires updating the
-# Render service's Build Command (in the dashboard) to include
-# `--no-build-isolation`, which is not reachable from this file.
+# Single Render service, TWO responsibilities merged into one process:
 #
-# app.py lazy-imports qiskit_ibm_runtime inside ibm_service() and gates the
-# IBM backend behind HAVE_IBM, so the worker starts and Osaka + Origin +
-# simulator all work without it. Once the buildCommand is updated per
-# SETUP.md, add `qiskit-ibm-runtime==0.30.0` back below the qiskit pin.
+#   1. v0.7.7  Quantum backends  ─ IBM Quantum · Origin Wukong · Osaka QIQB
+#      Endpoints:  /route         (public · WORKER_SHARED_SECRET gate)
+#                  /chainstate/route (internal · dual-secret gate)
 #
-# Origin's pyqpanda3 (China · Wukong 72q) is intentionally NOT listed:
-# it's installed opportunistically via render.yaml's buildCommand fallback
-# because the wheel is not always available for every glibc / Python combo.
-# The worker probes it at runtime and downgrades to sim if missing.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# --- HTTP client pin (satisfies oqtopus-client <2.1.0 upper cap) ------------
-urllib3>=1.26.0,<2.1.0
-
-# --- Web framework ---------------------------------------------------------
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-
-# --- Qiskit core + Aer simulator (local — no external service required) ----
-# Aer 0.15.1 is the bugfix release of the Aer 0.15 line that pairs with
-# Qiskit 1.2.x. Used for the `simulator` backend, universal fallback, and
-# the Osaka hybrid sim-tail when n_qubits > 1.
-qiskit==1.2.4
-qiskit-aer==0.15.1
-
-# --- Osaka University QIQB · ¹⁷¹Yb⁺ ion-trap · OQTOPUS Cloud ---------------
-# QURI Parts is QunaSys's modular quantum-algorithm framework (Apache-2.0);
-# quri-parts-oqtopus is the official Osaka QIQB client (Apache-2.0). Pinned
-# to the latest known-good versions as of 2026-08.
-quri-parts==0.26.2
-quri-parts-oqtopus==1.1.3
-
-# --- IBM Quantum backend (RE-ENABLE after updating Render Build Command) ---
-# Uncomment the line below AFTER changing your Render service's Build Command
-# from `pip install -r requirements.txt` to:
-#   pip install --upgrade pip 'setuptools>=65,<70' wheel && \
+#   2. v0.7.8  Hyperspectral Sensory Synthesis (Paper VIII)
+#      Endpoints:  /perception/hyperspectral · /perception/texture
+#                  /perception/acoustic      · /perception/synthesize
+#                  /perception/status  · /perception/sensors
+#                  /perception/veto/check    · /perception/train/tick
+#
+# Both responsibilities coexist in one FastAPI app: quantum routes and
+# perception routes are independent; failure of one does NOT affect the
+# other. Perception endpoints degrade gracefully when perception-only
+# dependencies (librosa, sklearn, boto3, supabase) are missing --- see
+# the try/except HAVE_* pattern in perception.py.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# Build & runtime notes for Render:
+#
+# buildCommand (from render.yaml, keep unchanged from v0.7.7):
+#   pip install --upgrade pip
+#   pip install 'setuptools>=65,<70' wheel
 #   pip install --prefer-binary --no-build-isolation -r requirements.txt
-# (Dashboard → Settings → Build Command. render.yaml is ignored for services
-# created via the dashboard, so it MUST be set there.)
+#   (pip install --prefer-binary --no-build-isolation pyqpanda3 || echo
+#      'pyqpanda3 unavailable on this platform; Origin backend will report
+#       unavailable and fall back to simulator/other backends')
 #
-# qiskit-ibm-runtime==0.30.0
+# The pyqpanda3 install is deliberately OUTSIDE this file --- the Origin
+# Wukong SDK is not always available on Render Python 3.11 build platform,
+# so the buildCommand attempts it with a fallback. Keeping it out of
+# requirements.txt lets the entire build succeed when it isn't available.
+#
+# startCommand:
+#   uvicorn app:app --host 0.0.0.0 --port $PORT
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ── FastAPI web layer (required for ALL endpoints) ─────────────────────────
+fastapi>=0.104
+uvicorn[standard]>=0.24
+pydantic>=2.5
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.7.7  ·  Quantum backend dependencies (do NOT remove --- required for
+# /route and /chainstate/route to keep functioning)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Qiskit core + local Aer simulator (ALL quantum backends need this) ─────
+qiskit>=1.1
+qiskit-aer>=0.14           # local Aer simulator · always-available fallback
+
+# ── IBM Quantum (Qiskit Runtime + SamplerV2) ───────────────────────────────
+qiskit-ibm-runtime>=0.24   # SamplerV2 primitive · cloud dispatch
+
+# ── Osaka University · OQTOPUS Cloud · ¹⁷¹Yb⁺ ion trap ─────────────────────
+quri-parts>=0.20           # QURI Parts framework
+quri-parts-oqtopus>=0.5    # OQTOPUS backend integration
+
+# ── Origin Wukong · installed by buildCommand with fallback ────────────────
+# pyqpanda3 is NOT listed here on purpose. See header notes above.
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.7.8  ·  Perception module dependencies (Paper VIII)
+#
+# All of these are OPTIONAL from the perspective of the module import
+# (perception.py catches ImportError and sets HAVE_* flags), but the
+# perception endpoints will return 503 with a clear message if the
+# relevant deps are missing. You want all of these for full functionality.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Core numerics (required by texture, acoustic, hyperspectral) ───────────
+numpy>=1.24,<2.0           # <2.0 pin for qiskit-aer/librosa/sklearn wheel compat
+scipy>=1.11                # sparse linear algebra for regularized inverse
+scikit-learn>=1.3          # ExtraTreesRegressor (texture) + Classifier (acoustic)
+
+# ── Image processing ───────────────────────────────────────────────────────
+Pillow>=10.0                    # PIL: image decode + convert to numpy array
+opencv-python-headless>=4.8     # patch operations · FFT prep · no GUI (Render)
+
+# ── Audio processing (STFT, wavelet, MFCC, RT60 estimation) ────────────────
+librosa>=0.10              # STFT + MFCC + spectral features
+soundfile>=0.12            # audio file decode (wav/flac/ogg)
+
+# ── Cloudflare R2 (trained EML model upload from training pipeline) ────────
+boto3>=1.28                # S3-compatible client for R2
+
+# ── Supabase Postgres (perception_priors + audit trails) ───────────────────
+supabase>=2.0              # supports sb.schema("chainstate_perception").table()
+
+# ── HTTP client (provenance-service calls + R2 model fetch) ────────────────
+httpx>=0.25
+
+# ── Training pipeline (fetch corpora, progress logging) ────────────────────
+requests>=2.31             # sync HTTP for corpus fetchers
+tqdm>=4.66                 # progress bars in training logs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# End of requirements.txt
+#
+# Verification after deploy:
+#   curl https://metastate-quantum.onrender.com/           → v0.7.7 quantum ok
+#   curl https://metastate-quantum.onrender.com/perception/status
+#       → { supabase_configured: true, r2_models_url_configured: true, ... }
+# ═══════════════════════════════════════════════════════════════════════════
