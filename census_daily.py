@@ -35,7 +35,10 @@ if any are absent):
 
     SUPABASE_URL                # from Supabase project settings
     SUPABASE_SERVICE_ROLE_KEY   # service_role key (matches existing perception config)
-    CHAINSTATE_INTERNAL_TOKEN   # shared with the Cloudflare Worker (v0.7.9)
+    CENSUS_INTERNAL_TOKEN       # shared with the Cloudflare Worker (v0.7.9 rev 2)
+                                # DEDICATED census secret — distinct from
+                                # CHAINSTATE_INTERNAL_TOKEN which continues
+                                # to protect the quantum autonomy path.
     CHAINSTATE_WORKER_BASE      # default: https://chainstate-worker.ciprianpater.workers.dev
     NVD_API_KEY                 # optional, gets 50 req/30s instead of 5 req/30s
     CENSUS_THETA_ALERT          # default 60
@@ -79,7 +82,7 @@ CHAINSTATE_WORKER         = os.environ.get(
     "CHAINSTATE_WORKER_BASE",
     "https://chainstate-worker.ciprianpater.workers.dev"
 ).rstrip("/")
-INTERNAL_TOKEN            = os.environ.get("CHAINSTATE_INTERNAL_TOKEN", "")
+INTERNAL_TOKEN            = os.environ.get("CENSUS_INTERNAL_TOKEN", "")
 NVD_API_KEY               = os.environ.get("NVD_API_KEY", "")
 
 # Threshold + weight defaults — must match wrangler.toml / worker vars.
@@ -302,14 +305,16 @@ def refresh_daily_digest_view():
 # ─── Push digest to Worker /census/ingest ──────────────────────────────
 async def push_to_worker(client: httpx.AsyncClient, digest: Dict[str, Any]):
     if not INTERNAL_TOKEN:
-        logger.warning("CHAINSTATE_INTERNAL_TOKEN not set; skipping worker push")
+        logger.warning("CENSUS_INTERNAL_TOKEN not set; skipping worker push")
         return None
     try:
         r = await client.post(
             f"{CHAINSTATE_WORKER}/census/ingest",
             headers={
                 "content-type": "application/json",
-                "x-chainstate-internal": INTERNAL_TOKEN,
+                # Preferred v0.7.9 rev 2 header. The Worker also accepts
+                # the legacy x-chainstate-internal alias transitionally.
+                "x-census-internal": INTERNAL_TOKEN,
             },
             json={
                 "source": "metastate_quantum:census_daily",

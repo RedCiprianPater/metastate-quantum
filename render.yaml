@@ -108,12 +108,14 @@ services:
         value: "true"                  # set to "false" to disable all census
                                        # functions without removing this section
 
-      # ---- Internal auth (shared with the CF Worker's X-CHAINSTATE-INTERNAL) ----
+      # ---- Internal auth (dedicated census secret, v0.7.9 rev 2) ----
       # The Cloudflare Worker's runCensusDailyTick() and pushToWorker() both
-      # send this token in the x-chainstate-internal header. Distinct from
-      # CHAINSTATE_SHARED_SECRET so census can be rotated without disturbing
-      # the /chainstate/route path.
-      - key: CHAINSTATE_INTERNAL_TOKEN
+      # send this token in the x-census-internal header. DELIBERATELY
+      # DISTINCT from CHAINSTATE_INTERNAL_TOKEN (which continues to protect
+      # the Worker's quantum autonomy path via /agi/quantum/route unchanged).
+      # This separation lets you rotate the census secret without disturbing
+      # the quantum path and vice versa.
+      - key: CENSUS_INTERNAL_TOKEN
         sync: false
 
       # ---- Companion Worker base URL ----

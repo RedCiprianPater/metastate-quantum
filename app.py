@@ -36,11 +36,11 @@ Two routes are exposed:
 v0.7.9 · Paper IX · Cyberspace Census additions (additive · never removes):
 
   GET  /census/status    — public capability probe (census subsystem state)
-  GET  /census/daily     — internal (X-CHAINSTATE-INTERNAL). Returns latest digest.
+  GET  /census/daily     — internal (X-CENSUS-INTERNAL). Returns latest digest.
   POST /census/trigger   — internal. Manually run the nightly tick outside cron.
 
   APScheduler runs run_daily_census() nightly at 05:00 UTC when CENSUS_ENABLED
-  and the CHAINSTATE_INTERNAL_TOKEN is set. Failure of the census layer never
+  and the CENSUS_INTERNAL_TOKEN is set. Failure of the census layer never
   affects /route or /chainstate/route.
 
 Deploy on Render (free tier). Set these as Render environment variables:
@@ -52,7 +52,9 @@ Deploy on Render (free tier). Set these as Render environment variables:
   OSAKA_DEVICE_ID          — device id, e.g. "osaka_iontrap_yb171" (registration-supplied)
   WORKER_SHARED_SECRET     — random string METASTATE Space sends as x-worker-secret
   CHAINSTATE_SHARED_SECRET — random string CHAINSTATE worker sends as x-chainstate-token
-  CHAINSTATE_INTERNAL_TOKEN — v0.7.9 · shared with the CF Worker for /census/* endpoints
+  CENSUS_INTERNAL_TOKEN    — v0.7.9 rev 2 · shared with the CF Worker for /census/* endpoints
+                             (distinct from CHAINSTATE_INTERNAL_TOKEN which continues to protect
+                             the quantum autonomy path on the Worker unchanged)
 """
 import os
 import math
@@ -530,7 +532,7 @@ except Exception:
     HAVE_SCHEDULER = False
 
 CENSUS_ENABLED           = os.environ.get("CENSUS_ENABLED", "true").lower() == "true"
-CHAINSTATE_INTERNAL_TOKEN = os.environ.get("CHAINSTATE_INTERNAL_TOKEN", "")
+CENSUS_INTERNAL_TOKEN    = os.environ.get("CENSUS_INTERNAL_TOKEN", "")
 
 _census_scheduler = None
 
@@ -578,12 +580,14 @@ async def _census_shutdown():
         _census_scheduler = None
 
 def _check_internal_token(token: Optional[str]):
-    """Gate for /census/daily and /census/trigger. Uses CHAINSTATE_INTERNAL_TOKEN
-    (distinct from CHAINSTATE_SHARED_SECRET so the two responsibilities can be
-    revoked/rotated independently)."""
-    if not CHAINSTATE_INTERNAL_TOKEN:
-        raise HTTPException(503, "CHAINSTATE_INTERNAL_TOKEN not configured on this deploy")
-    if token != CHAINSTATE_INTERNAL_TOKEN:
+    """Gate for /census/daily and /census/trigger. Uses CENSUS_INTERNAL_TOKEN —
+    a dedicated secret for the census subsystem, deliberately distinct from
+    CHAINSTATE_INTERNAL_TOKEN (which the Cloudflare Worker uses to protect its
+    own quantum autonomy path via /agi/quantum/route). Rotating the census
+    token does not touch the quantum path and vice versa."""
+    if not CENSUS_INTERNAL_TOKEN:
+        raise HTTPException(503, "CENSUS_INTERNAL_TOKEN not configured on this deploy")
+    if token != CENSUS_INTERNAL_TOKEN:
         raise HTTPException(401, "bad internal token")
 
 @app.get("/census/status")
@@ -596,41 +600,52 @@ def census_status():
         "census_module_error":       _census_import_error,
         "scheduler_installed":       HAVE_SCHEDULER,
         "scheduler_running":         _is_census_scheduler_running(),
-        "internal_token_configured": bool(CHAINSTATE_INTERNAL_TOKEN),
+        "internal_token_configured": bool(CENSUS_INTERNAL_TOKEN),
         "theta_alert":               float(os.environ.get("CENSUS_THETA_ALERT", "60")),
         "theta_lockdown":            float(os.environ.get("CENSUS_THETA_LOCKDOWN", "85")),
         "weights":                   os.environ.get("CENSUS_WEIGHTS", "0.35,0.30,0.20,0.15"),
         "supabase_schema":           os.environ.get("SUPABASE_CENSUS_SCHEMA", "chainstate_census"),
         "cron_schedule":             "0 5 * * *  (05:00 UTC daily)",
         "endpoints": {
-            "read_latest_digest": "GET  /census/daily      (internal · X-CHAINSTATE-INTERNAL)",
-            "trigger_run":        "POST /census/trigger    (internal · X-CHAINSTATE-INTERNAL)",
+            "read_latest_digest": "GET  /census/daily      (internal · X-CENSUS-INTERNAL)",
+            "trigger_run":        "POST /census/trigger    (internal · X-CENSUS-INTERNAL)",
             "public_status":      "GET  /census/status     (this endpoint · public)"
         }
     }
 
 @app.get("/census/daily")
-def census_daily_read(x_chainstate_internal: str = Header(None)):
+def census_daily_read(
+    x_census_internal: str = Header(None),
+    x_chainstate_internal: str = Header(None),  # legacy alias · accepted transitionally
+):
     """
     Returns the latest completed nightly census digest.
     Consumed by the CHAINSTATE Cloudflare Worker's 05:00 UTC cron in
-    runCensusDailyTick() (edge-worker.js v0.7.9). Internal-only.
+    runCensusDailyTick() (edge-worker.js v0.7.9 rev 2). Internal-only.
+    Accepts either X-CENSUS-INTERNAL (preferred, v0.7.9 rev 2) or the legacy
+    X-CHAINSTATE-INTERNAL header — but the value must always equal
+    CENSUS_INTERNAL_TOKEN (never CHAINSTATE_INTERNAL_TOKEN).
     """
     if not HAVE_CENSUS:
         raise HTTPException(503, f"census module not available: {_census_import_error}")
-    _check_internal_token(x_chainstate_internal)
+    _check_internal_token(x_census_internal or x_chainstate_internal)
     return latest_digest_from_supabase()
 
 @app.post("/census/trigger")
-async def census_trigger(x_chainstate_internal: str = Header(None)):
+async def census_trigger(
+    x_census_internal: str = Header(None),
+    x_chainstate_internal: str = Header(None),  # legacy alias · accepted transitionally
+):
     """
     Manually trigger a census run. Same auth as /census/daily. Blocks until
     the run completes (~30-90 seconds depending on feed latency) and returns
     the resulting digest. Useful for testing outside the 05:00 UTC cron.
+    Accepts either X-CENSUS-INTERNAL (preferred) or the legacy
+    X-CHAINSTATE-INTERNAL header — value must equal CENSUS_INTERNAL_TOKEN.
     """
     if not HAVE_CENSUS:
         raise HTTPException(503, f"census module not available: {_census_import_error}")
-    _check_internal_token(x_chainstate_internal)
+    _check_internal_token(x_census_internal or x_chainstate_internal)
     try:
         return await run_daily_census()
     except Exception as e:
