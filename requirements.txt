@@ -141,3 +141,24 @@ apscheduler>=3.10          # AsyncIOScheduler · CronTrigger
 #   curl https://metastate-quantum.onrender.com/census/status
 #       → { census_enabled: true, scheduler_running: true, ... }
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.8.0  ·  CHAINSTATE ROBOTICS AGI dependencies (Paper X Rev 2)
+#
+# Only ONE new library: google-genai for Gemini Robotics ER 2 calls.
+# All other robotics needs (supabase, httpx, apscheduler) are already
+# installed above so the robotics layer reuses the same libraries.
+#
+# If google-genai installation ever fails, /robotics/health will report
+# `robotics_module_installed: false` (or the dispatch will report gemini
+# unavailable) and quantum + perception + census continue unaffected.
+# The Cloudflare Worker's meta-layer coherence check (Paper X Rev 2 §4.5)
+# is the ultimate safeguard and does not depend on this SDK being present.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Google AI Studio SDK (Gemini Robotics ER 2 · public tier) ──────────────
+google-genai>=0.3          # from google import genai  ·  Client(api_key=...)
+
+# ── (VLA + On-Device 2 remain PARKED behind trusted-tester programme; no
+#     public SDK for those yet · Paper X Rev 2 Table 1)                     ──

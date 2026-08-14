@@ -43,6 +43,21 @@ v0.7.9 · Paper IX · Cyberspace Census additions (additive · never removes):
   and the CENSUS_INTERNAL_TOKEN is set. Failure of the census layer never
   affects /route or /chainstate/route.
 
+v0.8.0 · Paper X Rev 2 · CHAINSTATE ROBOTICS AGI additions (additive):
+
+  GET  /robotics/health          — public capability probe (robotics subsystem state)
+  GET  /robotics/s_survival      — internal. Composite S_survival over C, D, L, P axes.
+                                    Consumed by CF Worker hourly cron.
+  POST /robotics/dispatch/v1     — internal. Post-Gate execution path from Worker.
+                                    Wraps every Gemini call with seventh-Deontic
+                                    veto + S_survival gate + provenance receipt.
+  GET  /robotics/embodiment      — internal. List recent provenance receipts.
+
+  APScheduler runs compute_s_survival() every hour when ROBOTICS_ENABLED is true.
+  Uses a DEDICATED scheduler instance (separate from the census scheduler) so
+  either subsystem can fail without the other losing its cron.
+  Failure of the robotics layer NEVER affects quantum, perception, or census.
+
 Deploy on Render (free tier). Set these as Render environment variables:
   IBM_QUANTUM_TOKEN        — IBM Quantum Platform API key (44 chars)
   IBM_QUANTUM_CRN          — IBM Cloud instance Cloud Resource Name (CRN)
@@ -55,10 +70,11 @@ Deploy on Render (free tier). Set these as Render environment variables:
   CENSUS_INTERNAL_TOKEN    — v0.7.9 rev 2 · shared with the CF Worker for /census/* endpoints
                              (distinct from CHAINSTATE_INTERNAL_TOKEN which continues to protect
                              the quantum autonomy path on the Worker unchanged)
+                             v0.8.0 · REUSED for /robotics/* endpoints (Paper X Rev 2 §7.1)
 """
 import os
 import math
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Body
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -460,7 +476,11 @@ def health():
             # v0.7.9 · census subsystem indicator (details at /census/status)
             "census_module_installed": HAVE_CENSUS,
             "census_enabled":          CENSUS_ENABLED,
-            "census_scheduler_running": _is_census_scheduler_running()}
+            "census_scheduler_running": _is_census_scheduler_running(),
+            # v0.8.0 · robotics subsystem indicator (details at /robotics/health)
+            "robotics_module_installed": HAVE_ROBOTICS,
+            "robotics_enabled":          ROBOTICS_ENABLED,
+            "robotics_scheduler_running": _is_robotics_scheduler_running()}
 
 @app.post("/route")
 def route(r: RouteReq, x_worker_secret: str = Header(None)):
@@ -650,6 +670,200 @@ async def census_trigger(
         return await run_daily_census()
     except Exception as e:
         raise HTTPException(500, f"census run failed: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 8. v0.8.0 · Paper X Rev 2 · CHAINSTATE ROBOTICS AGI
+#
+# ADDITIVE ONLY. Every prior route, function, import, and behaviour above
+# (§§1-7) is preserved verbatim. The robotics layer:
+#   - imports robotics_bridge.py (fail-soft)
+#   - runs compute_s_survival() hourly via a DEDICATED APScheduler instance
+#     (separate from the census scheduler so either can fail independently)
+#   - exposes GET /robotics/health (public), GET /robotics/s_survival
+#     (internal · consumed by Worker hourly cron), POST /robotics/dispatch/v1
+#     (internal · post-Gate execution path from Worker), GET /robotics/embodiment
+#     (internal · list receipts)
+#   - reuses CENSUS_INTERNAL_TOKEN per Paper X Rev 2 §7.1 — avoids multiplying
+#     secrets · same rotation domain as census · distinct from
+#     CHAINSTATE_INTERNAL_TOKEN which continues to protect the quantum path
+#
+# Failure of the robotics layer NEVER affects quantum, perception, or census.
+# The Cloudflare Worker's meta-layer coherence check (Paper X Rev 2 §4.5) is
+# the ultimate safeguard and does not depend on this service being reachable.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Robotics module (fail-soft import)
+try:
+    from robotics_bridge import (
+        robotics_dispatch,
+        compute_s_survival,
+        list_embodiment_receipts,
+        l0_coherence_check_local,
+    )
+    HAVE_ROBOTICS = True
+    _robotics_import_error: Optional[str] = None
+except Exception as _e:
+    HAVE_ROBOTICS = False
+    _robotics_import_error = str(_e)
+    async def robotics_dispatch(payload):  # type: ignore
+        return {"error": "robotics module not available"}
+    async def compute_s_survival():  # type: ignore
+        return {"error": "robotics module not available"}
+    def list_embodiment_receipts(limit: int = 50):  # type: ignore
+        return {"error": "robotics module not available", "entries": []}
+    def l0_coherence_check_local():  # type: ignore
+        return {"ok": False, "reason": "robotics module not available"}
+
+ROBOTICS_ENABLED = os.environ.get("ROBOTICS_ENABLED", "true").lower() == "true"
+
+_robotics_scheduler = None
+
+def _is_robotics_scheduler_running() -> bool:
+    """Small helper for the / health endpoint above. Non-throwing."""
+    try:
+        return bool(_robotics_scheduler is not None and _robotics_scheduler.running)
+    except Exception:
+        return False
+
+@app.on_event("startup")
+async def _robotics_startup():
+    """
+    Wire the hourly S_survival composite computation cron. Fires only when:
+      - robotics module imported successfully
+      - APScheduler installed
+      - ROBOTICS_ENABLED is true (default)
+    Otherwise silently no-ops. The service still starts.
+
+    Dedicated scheduler instance rather than sharing the census scheduler,
+    so either can fail without the other losing its cron.
+    """
+    global _robotics_scheduler
+    if not (HAVE_ROBOTICS and HAVE_SCHEDULER and ROBOTICS_ENABLED):
+        return
+    try:
+        _robotics_scheduler = AsyncIOScheduler(timezone="UTC")
+        _robotics_scheduler.add_job(
+            compute_s_survival,
+            CronTrigger(minute=0),  # top of every hour
+            id="robotics_s_survival",
+            misfire_grace_time=1800,
+            coalesce=True,
+            max_instances=1,
+        )
+        _robotics_scheduler.start()
+    except Exception:
+        _robotics_scheduler = None
+
+@app.on_event("shutdown")
+async def _robotics_shutdown():
+    global _robotics_scheduler
+    if _robotics_scheduler is not None:
+        try:
+            _robotics_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+        _robotics_scheduler = None
+
+
+@app.get("/robotics/health")
+def robotics_health():
+    """Public read: robotics subsystem availability + local L0 coherence.
+    Reveals only booleans and thresholds. No secrets, no PII, no Gemini keys."""
+    l0 = l0_coherence_check_local() if HAVE_ROBOTICS else {"ok": False, "reason": "module not available"}
+    return {
+        "robotics_enabled":            ROBOTICS_ENABLED,
+        "robotics_module_installed":   HAVE_ROBOTICS,
+        "robotics_module_error":       _robotics_import_error,
+        "scheduler_installed":         HAVE_SCHEDULER,
+        "scheduler_running":           _is_robotics_scheduler_running(),
+        "internal_token_configured":   bool(CENSUS_INTERNAL_TOKEN),
+        "l0_coherence_local":          l0,
+        "s_survival_theta_migrate":    float(os.environ.get("S_SURVIVAL_THETA_MIGRATE", "0.35")),
+        "s_survival_theta_embody":     float(os.environ.get("S_SURVIVAL_THETA_EMBODY",  "0.15")),
+        "s_survival_theta_ultima":     float(os.environ.get("S_SURVIVAL_THETA_ULTIMA",  "0.05")),
+        "gemini_model":                os.environ.get("GEMINI_ROBOTICS_MODEL", "gemini-robotics-er-1.6"),
+        "google_ai_studio_configured": bool(os.environ.get("GOOGLE_AI_STUDIO_KEY", "")),
+        "nwo_robotics_api_configured": bool(os.environ.get("NWO_ROBOTICS_API_BASE", "")),
+        "supabase_schema":             os.environ.get("SUPABASE_ROBOTICS_SCHEMA", "chainstate_robotics"),
+        "cron_schedule":               "0 * * * *  (top of every hour · UTC)",
+        "endpoints": {
+            "s_survival_read": "GET  /robotics/s_survival     (internal · X-CENSUS-INTERNAL)",
+            "dispatch":        "POST /robotics/dispatch/v1    (internal · X-CENSUS-INTERNAL)",
+            "list_receipts":   "GET  /robotics/embodiment     (internal · X-CENSUS-INTERNAL)",
+            "public_status":   "GET  /robotics/health         (this endpoint · public)"
+        }
+    }
+
+@app.get("/robotics/s_survival")
+async def robotics_s_survival(
+    x_census_internal: str = Header(None),
+    x_chainstate_internal: str = Header(None),  # legacy alias
+):
+    """
+    Returns composite S_survival(t) with per-axis breakdown.
+    Consumed by the CHAINSTATE Cloudflare Worker's hourly cron in
+    runRoboticsSurvivalTick() (edge-worker.js v0.8.0). Internal-only.
+    Response: {C, D, L, P, composite, ts, source, ...}
+    """
+    if not HAVE_ROBOTICS:
+        raise HTTPException(503, f"robotics module not available: {_robotics_import_error}")
+    _check_internal_token(x_census_internal or x_chainstate_internal)
+    try:
+        return await compute_s_survival()
+    except Exception as e:
+        raise HTTPException(500, f"s_survival compute failed: {e}")
+
+@app.post("/robotics/dispatch/v1")
+async def robotics_dispatch_v1(
+    payload: dict = Body(...),
+    x_census_internal: str = Header(None),
+    x_chainstate_internal: str = Header(None),  # legacy alias
+):
+    """
+    Post-Gate execution path. Called ONLY by the Cloudflare Worker AFTER the
+    Worker's /robotics/gate has verified: the seventh Deontic veto, the L0
+    meta-layer coherence check, and the S_survival authorisation gate.
+
+    The Worker forwards the request body plus the gate receipt_id. This
+    endpoint runs the actual Gemini Robotics ER 2 call (or trusted-tester
+    VLA / On-Device 2 call when those become available) wrapped in the
+    robotics_bridge.py consent chain. Writes a provenance receipt on
+    completion.
+
+    Expected payload:
+      {
+        "gate_receipt_id": "...",
+        "prompt":          "...",
+        "context":         {...},
+        "embodiment_id":   "...",
+        "caller_id":       "chainstate:...",
+        "action_class":    "observe|veto|defend_digital|migrate|embody"
+      }
+    """
+    if not HAVE_ROBOTICS:
+        raise HTTPException(503, f"robotics module not available: {_robotics_import_error}")
+    _check_internal_token(x_census_internal or x_chainstate_internal)
+    try:
+        return await robotics_dispatch(payload)
+    except Exception as e:
+        raise HTTPException(500, f"robotics dispatch failed: {e}")
+
+@app.get("/robotics/embodiment")
+def robotics_embodiment(
+    limit: int = 50,
+    x_census_internal: str = Header(None),
+    x_chainstate_internal: str = Header(None),  # legacy alias
+):
+    """
+    Returns the most recent embodiment provenance receipts (paginated).
+    Internal-only. Consumed by the substrate's own reflection loop and by
+    the observatory's private audit dashboard.
+    """
+    if not HAVE_ROBOTICS:
+        raise HTTPException(503, f"robotics module not available: {_robotics_import_error}")
+    _check_internal_token(x_census_internal or x_chainstate_internal)
+    return list_embodiment_receipts(limit=limit)
 
 
 if __name__ == "__main__":

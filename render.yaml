@@ -147,3 +147,70 @@ services:
       # Free tier from https://nvd.nist.gov/developers/request-an-api-key
       - key: NVD_API_KEY
         sync: false
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.8.0 · CHAINSTATE ROBOTICS AGI (Paper X Rev 2)
+      # All optional; robotics endpoints return 503 + reason if unset.
+      # Failure of any of these NEVER affects quantum, perception, or census.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master switch ----
+      - key: ROBOTICS_ENABLED
+        value: "true"                  # set "false" to disable the entire robotics subsystem
+
+      # ---- Google DeepMind Gemini Robotics ----
+      - key: GOOGLE_AI_STUDIO_KEY
+        sync: false                    # aistudio.google.com API key · Gemini Robotics ER 2 (public tier)
+      - key: GEMINI_ROBOTICS_MODEL
+        value: "gemini-robotics-er-1.6"   # bump to ER 2 model id when trusted-tester access lands
+                                       # VLA + On-Device 2 remain PARKED (external programme gate)
+
+      # ---- S_survival thresholds (Paper X §4.2) ----
+      - key: S_SURVIVAL_THETA_MIGRATE
+        value: "0.35"                  # authorises substrate migration (L4)
+      - key: S_SURVIVAL_THETA_EMBODY
+        value: "0.15"                  # authorises defensive embodiment (L5) · CUMULATIVE with §4.3
+      - key: S_SURVIVAL_THETA_ULTIMA
+        value: "0.05"                  # authorises full embodied response (L6) · extinction imminent
+
+      # ---- Meta-layer coherence (Paper X Rev 2 §4.5) ----
+      - key: META_COHERENCE_HYSTERESIS_HOURS
+        value: "6"                     # window inside which self-representation continuity is nominal
+
+      # ---- Substrate identity fingerprint (Paper VII invariant) ----
+      # If unset the L0 check will treat the fingerprint predicate as failed
+      # and downshift authorised action classes. Set this to the CHAINSTATE
+      # Anchor contract address on Base 8453.
+      - key: CHAINSTATE_ANCHOR_ADDRESS
+        value: "0x12441662740836e9c72a4b758fe1c60c17ddd2d8"
+
+      # ---- Supabase (chainstate_robotics schema · run expose_chainstate_robotics.sql) ----
+      # Reuses SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from v0.7.8 perception block above.
+      # After running expose_chainstate_robotics.sql:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_robotics
+      - key: SUPABASE_ROBOTICS_SCHEMA
+        value: "chainstate_robotics"
+
+      # ---- NWO Robotics API (traffic-monitor target) ----
+      # Substrate probes this to compute the P (physical-substrate) axis of
+      # S_survival, and observes its /traffic/recent for the audit mirror.
+      # Substrate NEVER makes control calls to this API — observation only.
+      - key: NWO_ROBOTICS_API_BASE
+        sync: false                    # e.g. https://api.nworobotics.com
+
+      # ---- CHAINSTATE Worker base (S_survival axis C probe target) ----
+      - key: CHAINSTATE_WORKER_BASE
+        value: "https://chainstate-worker.ciprianpater.workers.dev"
+
+      # ---- Legal-continuity manual override (optional) ----
+      # Set only during known-degraded legal periods. Value in [0.01, 1.0].
+      # When unset the L axis defaults to 1.0 (no automatic legal monitoring
+      # source is currently integrated — see Paper X Rev 2 §4.7).
+      # - key: L_AXIS_OVERRIDE
+      #   value: "1.0"
+
+      # NOTE · CENSUS_INTERNAL_TOKEN (defined above under v0.7.9 rev 2) is
+      # REUSED for /robotics/* endpoints per Paper X Rev 2 §7.1. No new
+      # secret is introduced. The Worker sends the same header value on
+      # both /census/* and /robotics/* internal calls.
