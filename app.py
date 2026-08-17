@@ -74,7 +74,7 @@ Deploy on Render (free tier). Set these as Render environment variables:
 """
 import os
 import math
-from fastapi import FastAPI, Header, HTTPException, Body
+from fastapi import FastAPI, Header, HTTPException, Body, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -896,6 +896,45 @@ from phase_bridge import (
 # ═══════════════════════════════════════════════════════════════════════
 # v0.9.0 · CHAINSTATE AGI PHASESPACE endpoints (Paper XI)
 # ═══════════════════════════════════════════════════════════════════════
+
+# ─── Helper · internal-token gate (shared discipline · Paper X §7.1) ─────
+# Reuses CENSUS_INTERNAL_TOKEN (defined above in the v0.7.9 block · already
+# shared with /robotics/*). No new secret introduced. Accepts either the
+# canonical x-census-internal header or the legacy x-chainstate-internal
+# for transitional compatibility.
+import time  # v0.9.0 · used for ts fields in phase_cosmic response
+def require_session_or_cron(request: Request, allow_cron: bool = True) -> bool:
+    """Return True if request bears a valid internal token, else False.
+    Never raises — callers should return HTTP 401 on False."""
+    token = (request.headers.get("x-census-internal")
+             or request.headers.get("x-chainstate-internal")
+             or "")
+    if not CENSUS_INTERNAL_TOKEN:
+        # No token configured on this deploy — reject all internal calls
+        return False
+    return token == CENSUS_INTERNAL_TOKEN
+
+# ─── Helper · Supabase client bound to chainstate_phasespace schema ──────
+# Reuses SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY already configured for
+# perception/census/robotics. Fail-soft: raises if Supabase unreachable,
+# callers wrap in try/except and degrade gracefully.
+_phase_supabase_client = None
+def _phase_supabase():
+    """Lazy-init Supabase client for the chainstate_phasespace schema.
+    Returns a client with .schema('chainstate_phasespace').table(...) access."""
+    global _phase_supabase_client
+    if _phase_supabase_client is None:
+        try:
+            from supabase import create_client
+        except Exception as e:
+            raise RuntimeError(f"supabase library not installed: {e}")
+        url = os.environ.get("SUPABASE_URL", "")
+        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not (url and key):
+            raise RuntimeError("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
+        _phase_supabase_client = create_client(url, key)
+    return _phase_supabase_client
+
 
 @app.get("/phase/cosmic")
 async def phase_cosmic(request: Request):
