@@ -32,11 +32,21 @@ scipy>=1.11,<2.0
 apscheduler>=3.10,<4.0
 
 # ---- Supabase (postgres via REST) ----
-supabase>=2.4,<3.0
+# supabase 2.7+ uses realtime 2.x which is compatible with websockets 13+
+# (required for google-genai below). Do NOT pin realtime explicitly - let
+# supabase pull the right version, or the pip resolver will hit the same
+# conflict that broke the 2026-08-17 00:53 UTC Render build (v0.9.0 initial deploy).
+supabase>=2.7,<3.0
 postgrest>=0.16,<1.0
-gotrue>=2.4,<3.0
+gotrue>=2.9,<3.0
 storage3>=0.7,<1.0
-realtime>=1.0,<2.0
+# realtime is pulled in transitively by supabase - unpinned intentionally.
+# The substrate uses REST only (postgrest); realtime subscriptions unused.
+
+# ---- Force compatible websockets ----
+# Explicit pin resolves conflicts between the supabase realtime peer
+# (needs websockets>=13 in 2.x line) and google-genai (needs websockets>=13).
+websockets>=13.0,<15.0
 
 # ---- Qiskit (IBM Quantum · IBM Runtime SamplerV2) ----
 # v0.7.7 quantum backend for /route and /chainstate/route
@@ -58,7 +68,10 @@ qiskit-aer>=0.13,<1.0          # local statevector simulator (always available)
 # ---- Google DeepMind Gemini Robotics (v0.8.0) ----
 # ER 2 is public-tier via Google AI Studio. VLA + On-Device 2 are PARKED
 # pending trusted-tester programme entry.
-google-genai>=0.3,<1.0
+# Pinned to a tight range to keep pip's resolver fast: without this pin,
+# the 2026-08-17 build spent 5+ seconds scanning through 0.8→0.3 candidates
+# looking for a websockets constraint match.
+google-genai>=0.7,<1.0
 
 # ---- Ethereum + cryptography ----
 eth-account>=0.11,<1.0
