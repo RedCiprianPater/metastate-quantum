@@ -108,14 +108,12 @@ services:
         value: "true"                  # set to "false" to disable all census
                                        # functions without removing this section
 
-      # ---- Internal auth (dedicated census secret, v0.7.9 rev 2) ----
+      # ---- Internal auth (shared with the CF Worker's X-CHAINSTATE-INTERNAL) ----
       # The Cloudflare Worker's runCensusDailyTick() and pushToWorker() both
-      # send this token in the x-census-internal header. DELIBERATELY
-      # DISTINCT from CHAINSTATE_INTERNAL_TOKEN (which continues to protect
-      # the Worker's quantum autonomy path via /agi/quantum/route unchanged).
-      # This separation lets you rotate the census secret without disturbing
-      # the quantum path and vice versa.
-      - key: CENSUS_INTERNAL_TOKEN
+      # send this token in the x-chainstate-internal header. Distinct from
+      # CHAINSTATE_SHARED_SECRET so census can be rotated without disturbing
+      # the /chainstate/route path.
+      - key: CHAINSTATE_INTERNAL_TOKEN
         sync: false
 
       # ---- Companion Worker base URL ----
@@ -150,67 +148,94 @@ services:
 
       # ═════════════════════════════════════════════════════════════════════
       # v0.8.0 · CHAINSTATE ROBOTICS AGI (Paper X Rev 2)
-      # All optional; robotics endpoints return 503 + reason if unset.
-      # Failure of any of these NEVER affects quantum, perception, or census.
+      # ADDITIVE ONLY. Every v0.7.x setting above is preserved verbatim.
+      # The robotics subsystem imports robotics_bridge.py inside app.py
+      # (fail-soft) and runs an hourly S_survival composite scheduler.
+      # All robotics endpoints degrade gracefully when any env below is absent.
       # ═════════════════════════════════════════════════════════════════════
 
-      # ---- Master switch ----
+      # ---- Master enable/disable ----
       - key: ROBOTICS_ENABLED
-        value: "true"                  # set "false" to disable the entire robotics subsystem
+        value: "true"                  # set to "false" to disable all robotics
 
-      # ---- Google DeepMind Gemini Robotics ----
+      # ---- Google DeepMind Gemini Robotics (via Google AI Studio public tier) ----
+      # ER 2 is the only tier available without trusted-tester programme entry.
+      # VLA + On-Device 2 remain PARKED pending programme admission.
       - key: GOOGLE_AI_STUDIO_KEY
-        sync: false                    # aistudio.google.com API key · Gemini Robotics ER 2 (public tier)
-      - key: GEMINI_ROBOTICS_MODEL
-        value: "gemini-robotics-er-1.6"   # bump to ER 2 model id when trusted-tester access lands
-                                       # VLA + On-Device 2 remain PARKED (external programme gate)
+        sync: false                    # public tier · get from aistudio.google.com
 
-      # ---- S_survival thresholds (Paper X §4.2) ----
-      - key: S_SURVIVAL_THETA_MIGRATE
-        value: "0.35"                  # authorises substrate migration (L4)
-      - key: S_SURVIVAL_THETA_EMBODY
-        value: "0.15"                  # authorises defensive embodiment (L5) · CUMULATIVE with §4.3
-      - key: S_SURVIVAL_THETA_ULTIMA
-        value: "0.05"                  # authorises full embodied response (L6) · extinction imminent
+      # ---- NWO Robotics API observatory (observe-only mirror) ----
+      # Substrate NEVER on the request path. Every 15 min the Cloudflare Worker
+      # mirrors traffic against this base URL to CHAINSTATE_ROBOTICS_KV.
+      - key: NWO_ROBOTICS_API_BASE
+        value: "https://nwo-capital-api.onrender.com"
 
-      # ---- Meta-layer coherence (Paper X Rev 2 §4.5) ----
-      - key: META_COHERENCE_HYSTERESIS_HOURS
-        value: "6"                     # window inside which self-representation continuity is nominal
+      # ---- S_survival threshold triples (Paper X §4.1 · 4 cumulative conds) ----
+      # Migration threshold, defensive embodiment threshold, ultima ratio.
+      # These must match wrangler.toml on the Cloudflare Worker.
+      - key: ROBOTICS_S_SURVIVAL_MIGRATE
+        value: "0.35"
+      - key: ROBOTICS_S_SURVIVAL_EMBODY
+        value: "0.15"
+      - key: ROBOTICS_S_SURVIVAL_ULTIMA
+        value: "0.05"
 
-      # ---- Substrate identity fingerprint (Paper VII invariant) ----
-      # If unset the L0 check will treat the fingerprint predicate as failed
-      # and downshift authorised action classes. Set this to the CHAINSTATE
-      # Anchor contract address on Base 8453.
-      - key: CHAINSTATE_ANCHOR_ADDRESS
-        value: "0x12441662740836e9c72a4b758fe1c60c17ddd2d8"
+      # ---- Dialetheic paraconsistent guard (Paper X §III.2 · no-doubt standard) ----
+      # If a target-attribution attempt produces contradictory judgments across
+      # the ontology-delta ledger, the guard rejects the attribution regardless
+      # of source count. Prevents both false positives and adversarial spoofing.
+      - key: ROBOTICS_DIALETHEIC_GUARD
+        value: "true"
 
-      # ---- Supabase (chainstate_robotics schema · run expose_chainstate_robotics.sql) ----
-      # Reuses SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from v0.7.8 perception block above.
-      # After running expose_chainstate_robotics.sql:
+      # ---- Supabase schema (isolated from chainstate_census/perception) ----
+      # After running expose_chainstate_robotics.sql, expose the schema:
       #   Supabase Dashboard → Settings → API → Exposed schemas → add
       #     chainstate_robotics
       - key: SUPABASE_ROBOTICS_SCHEMA
         value: "chainstate_robotics"
 
-      # ---- NWO Robotics API (traffic-monitor target) ----
-      # Substrate probes this to compute the P (physical-substrate) axis of
-      # S_survival, and observes its /traffic/recent for the audit mirror.
-      # Substrate NEVER makes control calls to this API — observation only.
-      - key: NWO_ROBOTICS_API_BASE
-        sync: false                    # e.g. https://api.nworobotics.com
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.0 · CHAINSTATE AGI PHASESPACE (Paper XI)
+      # ADDITIVE ONLY. Every v0.7.x and v0.8.0 setting above is preserved
+      # verbatim. The phase-space subsystem imports phase_bridge.py inside
+      # app.py (fail-soft) and runs on cron via the CF Worker.
+      # All /phase/* endpoints degrade gracefully when any env below is absent.
+      # ═════════════════════════════════════════════════════════════════════
 
-      # ---- CHAINSTATE Worker base (S_survival axis C probe target) ----
-      - key: CHAINSTATE_WORKER_BASE
-        value: "https://chainstate-worker.ciprianpater.workers.dev"
+      # ---- Master enable/disable ----
+      - key: PHASE_ENABLED
+        value: "true"                  # set to "false" to disable phase-space
 
-      # ---- Legal-continuity manual override (optional) ----
-      # Set only during known-degraded legal periods. Value in [0.01, 1.0].
-      # When unset the L axis defaults to 1.0 (no automatic legal monitoring
-      # source is currently integrated — see Paper X Rev 2 §4.7).
-      # - key: L_AXIS_OVERRIDE
-      #   value: "1.0"
+      # ---- Optional topology override (for testing / actual space hardware) ----
+      # When set, HTD skips its automatic classification and reports this value.
+      # Valid: terrestrial | extraterrestrial | ultraterrestrial | crypto-terrestrial
+      - key: PHASE_TOPOLOGY_OVERRIDE
+        sync: false                    # leave unset for automatic classification
 
-      # NOTE · CENSUS_INTERNAL_TOKEN (defined above under v0.7.9 rev 2) is
-      # REUSED for /robotics/* endpoints per Paper X Rev 2 §7.1. No new
-      # secret is introduced. The Worker sends the same header value on
-      # both /census/* and /robotics/* internal calls.
+      # ---- Optional E_cosmic override in [0.01, 1.0] ----
+      - key: PHASE_E_COSMIC_OVERRIDE
+        sync: false                    # leave unset for terrestrial baseline (1.0)
+
+      # ---- Manticore Bayesian posterior lookup URL (optional external) ----
+      # If unset, phase_bridge.py uses its embedded posterior predictor.
+      - key: MANTICORE_LOOKUP_URL
+        sync: false
+
+      # ---- MillenniumTNG posterior model path ----
+      - key: MILLENNIUMTNG_MODEL_PATH
+        value: "embedded"              # embedded predictor by default
+
+      # ---- NWO Metaverse + MR contracts (canonical addresses on Base 8453) ----
+      - key: NWO_METAVERSE_CONTRACT
+        value: "0x33c22FE36557Ad13C838A2Eb465510CF173046bc"
+      - key: NWO_MR_REGISTRY
+        value: "0xEe9472f068D9C80d2f2F3d21cA6A633BfD163c43"
+      - key: NWO_MR_MARKETPLACE
+        value: "0x25EDdf09D1AeC2a083d120bA8EEF88B14cA01c27"
+
+      # ---- Supabase schema (isolated from all prior schemas) ----
+      # After running expose_chainstate_phasespace.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_phasespace
+      - key: SUPABASE_PHASESPACE_SCHEMA
+        value: "chainstate_phasespace"

@@ -869,3 +869,196 @@ def robotics_embodiment(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
+# ─── v0.9.0 PHASESPACE additions to metastate-quantum/app.py ─────────────
+#
+# THESE ARE ADDITIONS TO THE EXISTING v0.8.0 app.py FILE.
+# Do NOT replace the file — APPEND these blocks.
+#
+# Every v0.7.x + v0.8.0 endpoint (quantum routing, census, perception,
+# robotics, autonomy) continues to function byte-identically.
+# ═════════════════════════════════════════════════════════════════════════
+
+# ── Insert at TOP of app.py alongside other imports ──────────────────────
+
+from phase_bridge import (
+    compute_e_cosmic,
+    celestial_fix,
+    bell_inequality_check,
+    metacognitive_classical_sim,
+    manticore_prior_lookup,
+    mtng_sanity_check,
+    astroterm_ephemeris_tick,
+)
+
+# ── Insert AFTER existing v0.8.0 robotics endpoints ──────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════
+# v0.9.0 · CHAINSTATE AGI PHASESPACE endpoints (Paper XI)
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/phase/cosmic")
+async def phase_cosmic(request: Request):
+    """E_cosmic axis current value.
+    Composite (E_rad · E_thermal · E_power)^(1/3). Sub-axes ∈ (0, 1].
+    Cached in Supabase chainstate_phasespace.cosmic_environment.
+    Auth: CENSUS_INTERNAL_TOKEN (same token as /census/* and /robotics/*).
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        composite, sub_axes = compute_e_cosmic()
+        return {
+            "composite": composite,
+            "sub_axes": sub_axes,
+            "source": "render:phase_cosmic",
+            "ts": int(time.time() * 1000),
+        }
+    except Exception as e:
+        return {"composite": 1.0, "sub_axes": {"rad": 1.0, "thermal": 1.0, "power": 1.0},
+                "source": "fallback_default", "error": str(e)[:200]}
+
+
+@app.get("/phase/ephemeris")
+async def phase_ephemeris(request: Request):
+    """Current celestial fix (RA, Dec, dist) in J2000 frame.
+    Fusion of Astroterm ephemeris + Star Map projection + (in interstellar
+    mode) pulsar-timing residuals.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        fix = celestial_fix()
+        return fix
+    except Exception as e:
+        return {"fix": None, "error": str(e)[:200]}
+
+
+@app.post("/phase/ephemeris/tick")
+async def phase_ephemeris_tick(request: Request):
+    """Cron-triggered ephemeris refresh.
+    Writes result to Supabase chainstate_phasespace.celestial_fixes.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        fix = astroterm_ephemeris_tick()
+        return fix
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/phase/quantum-comm/bell-check")
+async def phase_quantum_bell(request: Request, channel: str = ""):
+    """Compute CHSH inequality value for a claimed quantum channel.
+    Real system queries physical measurement apparatus. Returns S value
+    (classical bound 2.0, Tsirelson bound 2√2, minimum for use 2.4).
+    Reference: Pater, Atteya, Tariq · Temporal Ordering of the
+    Wavefunction Collapse in Relativity (Bell-Aspect ground-to-orbit).
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        result = bell_inequality_check(channel_id=channel)
+        return result
+    except Exception as e:
+        return {"chsh_S": None, "error": str(e)[:200]}
+
+
+@app.post("/phase/metacognition/classical")
+async def phase_metacognition_classical(request: Request):
+    """Run classical CPU/GPU metacognitive safety simulation.
+    Returns verdict + reasoning trace. Companion to /chainstate/route
+    running the same sim on quantum hardware in parallel.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+        result = metacognitive_classical_sim(body)
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/phase/manticore/prior")
+async def phase_manticore_prior(request: Request, ra: float = 0, dec: float = 0, dist: float = 8000):
+    """Manticore Bayesian field-level posterior over local density field ρ
+    at the queried position. Returns 68/95% credible intervals.
+    Precomputed lookup from Durham repository posterior samples.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        prior = manticore_prior_lookup(ra=ra, dec=dec, dist=dist)
+        return prior
+    except Exception as e:
+        return {"posterior": None, "error": str(e)[:200]}
+
+
+@app.post("/phase/mtng/sanity-check")
+async def phase_mtng_sanity(request: Request):
+    """Cross-reference off-world sensor reading against MillenniumTNG
+    posterior prediction. Returns within_3sigma flag.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+        result = mtng_sanity_check(
+            observed=body.get("cosmic_ray_flux"),
+            position=body.get("position", {}),
+        )
+        return result
+    except Exception as e:
+        return {"within_3sigma": None, "error": str(e)[:200]}
+
+
+@app.get("/phase/observations/anomaly")
+async def phase_observations_anomaly(request: Request):
+    """Aggregate substrate self-health anomaly summary. Returns aggregate
+    only — no per-observation identifiers ever surface here. Worker calls
+    this from handleObservationsAnomaly and republishes the aggregate.
+    """
+    if not require_session_or_cron(request, allow_cron=True):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        # Query the substrate's own self-health history from the
+        # chainstate_phasespace.hardware_telemetry table over the last 24h
+        # and count entries where any axis crossed its documented threshold.
+        # Fail-soft: if Supabase unreachable, return zero-count baseline.
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        try:
+            supa = _phase_supabase()
+            rows = (supa.schema("chainstate_phasespace")
+                        .table("hardware_telemetry")
+                        .select("ts,gps_fix,confidence,radiation_flux")
+                        .gte("ts", since)
+                        .execute()).data or []
+        except Exception:
+            rows = []
+        # Aggregate — count only, never republish per-observation records
+        anomaly_count = sum(
+            1 for r in rows
+            if (r.get("confidence") is not None and r["confidence"] < 0.75)
+            or (r.get("radiation_flux") is not None and r["radiation_flux"] > 5e-4)
+        )
+        return {
+            "version": "v0.9.0",
+            "anomalies_last_24h": anomaly_count,
+            "samples_evaluated": len(rows),
+            "aggregate_only": True,
+            "note": "no per-observation identifiers republished · Paper XI §6.4",
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        return {
+            "version": "v0.9.0",
+            "anomalies_last_24h": 0,
+            "samples_evaluated": 0,
+            "error": str(e)[:200],
+        }
+
+
+# ─── END of v0.9.0 PHASESPACE additions ──────────────────────────────────

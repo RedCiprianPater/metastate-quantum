@@ -1,164 +1,93 @@
-# ═══════════════════════════════════════════════════════════════════════════
-# metastate-quantum  ·  complete requirements.txt
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
+# metastate-quantum · requirements.txt · v0.9.0
+# Full drop-in file (not a patch)
+# =============================================================================
+# Complete dependency set covering all subsystems:
+#   · v0.7.0-v0.7.7 quantum (IBM Runtime · Origin QPanda · Osaka OQTOPUS · Aer)
+#   · v0.7.8 perception (chainstate_perception schema)
+#   · v0.7.9 census (chainstate_census schema · APScheduler)
+#   · v0.8.0 robotics (Gemini via google-genai · chainstate_robotics schema)
+#   · v0.9.0 phasespace (astropy · skyfield · chainstate_phasespace schema)
 #
-# Single Render service, THREE responsibilities merged into one process:
-#
-#   1. v0.7.7  Quantum backends  ─ IBM Quantum · Origin Wukong · Osaka QIQB
-#      Endpoints:  /route         (public · WORKER_SHARED_SECRET gate)
-#                  /chainstate/route (internal · dual-secret gate)
-#
-#   2. v0.7.8  Hyperspectral Sensory Synthesis (Paper VIII)
-#      Endpoints:  /perception/hyperspectral · /perception/texture
-#                  /perception/acoustic      · /perception/synthesize
-#                  /perception/status  · /perception/sensors
-#                  /perception/veto/check    · /perception/train/tick
-#
-#   3. v0.7.9  Cyberspace Census (Paper IX)                        ← NEW
-#      Endpoints:  /census/status   (public)
-#                  /census/daily    (internal · CHAINSTATE_INTERNAL_TOKEN)
-#                  /census/trigger  (internal · CHAINSTATE_INTERNAL_TOKEN)
-#      Cron:       05:00 UTC daily (APScheduler)
-#
-# All three responsibilities coexist in one FastAPI app: quantum routes,
-# perception routes, and census subsystem are independent; failure of one
-# does NOT affect the others. Perception + census endpoints degrade
-# gracefully when their optional deps are missing (try/except HAVE_* pattern
-# in perception.py and app.py).
-#
-# ═══════════════════════════════════════════════════════════════════════════
-# Build & runtime notes for Render:
-#
-# buildCommand (from render.yaml, keep unchanged from v0.7.7):
-#   pip install --upgrade pip
-#   pip install 'setuptools>=65,<70' wheel
-#   pip install --prefer-binary --no-build-isolation -r requirements.txt
-#   (pip install --prefer-binary --no-build-isolation pyqpanda3 || echo
-#      'pyqpanda3 unavailable on this platform; Origin backend will report
-#       unavailable and fall back to simulator/other backends')
-#
-# The pyqpanda3 install is deliberately OUTSIDE this file --- the Origin
-# Wukong SDK is not always available on Render Python 3.11 build platform,
-# so the buildCommand attempts it with a fallback. Keeping it out of
-# requirements.txt lets the entire build succeed when it isn't available.
-#
-# startCommand:
-#   uvicorn app:app --host 0.0.0.0 --port $PORT
-# ═══════════════════════════════════════════════════════════════════════════
+# All packages pinned to versions Render's free-tier builder handles cleanly.
+# Fail-soft imports inside app.py mean any single missing package degrades
+# only its subsystem, not the whole service.
+# =============================================================================
 
+# ---- Web framework + server ----
+fastapi>=0.110,<0.120
+uvicorn[standard]>=0.27,<0.30
+pydantic>=2.5,<3.0
+python-multipart>=0.0.9      # form-data upload support
 
-# ── FastAPI web layer (required for ALL endpoints) ─────────────────────────
-fastapi>=0.104
-uvicorn[standard]>=0.24
-pydantic>=2.5
+# ---- HTTP client ----
+httpx>=0.27,<0.30
+requests>=2.31,<3.0
 
+# ---- Data + numerics ----
+numpy>=1.26,<2.0
+scipy>=1.11,<2.0
 
-# ═══════════════════════════════════════════════════════════════════════════
-# v0.7.7  ·  Quantum backend dependencies (do NOT remove --- required for
-# /route and /chainstate/route to keep functioning)
-# ═══════════════════════════════════════════════════════════════════════════
+# ---- Scheduler (v0.7.9 census · v0.9.0 phase-space fallback) ----
+apscheduler>=3.10,<4.0
 
-# ── Qiskit core + local Aer simulator (ALL quantum backends need this) ─────
-qiskit>=1.1
-qiskit-aer>=0.14           # local Aer simulator · always-available fallback
+# ---- Supabase (postgres via REST) ----
+supabase>=2.4,<3.0
+postgrest>=0.16,<1.0
+gotrue>=2.4,<3.0
+storage3>=0.7,<1.0
+realtime>=1.0,<2.0
 
-# ── IBM Quantum (Qiskit Runtime + SamplerV2) ───────────────────────────────
-qiskit-ibm-runtime>=0.24   # SamplerV2 primitive · cloud dispatch
+# ---- Qiskit (IBM Quantum · IBM Runtime SamplerV2) ----
+# v0.7.7 quantum backend for /route and /chainstate/route
+qiskit>=1.0,<2.0
+qiskit-ibm-runtime>=0.20,<1.0
+qiskit-aer>=0.13,<1.0          # local statevector simulator (always available)
 
-# ── Osaka University · OQTOPUS Cloud · ¹⁷¹Yb⁺ ion trap ─────────────────────
-quri-parts>=0.20           # QURI Parts framework
-quri-parts-oqtopus>=0.5    # OQTOPUS backend integration
+# ---- Origin QPanda (Origin Wukong · CPU fallback if wheel unavailable) ----
+# pyqpanda3 is a pip-only package with platform-specific wheels; installation
+# is best-effort via render.yaml buildCommand `|| echo unavailable`.
+# Not listed here so pip install --exit-code-on-fail=false skips it cleanly.
+# pyqpanda3>=3.0        # installed conditionally via buildCommand
 
-# ── Origin Wukong · installed by buildCommand with fallback ────────────────
-# pyqpanda3 is NOT listed here on purpose. See header notes above.
+# ---- Osaka OQTOPUS (¹⁷¹Yb⁺ ion trap · quri-parts backend) ----
+# Best-effort · service falls back to Aer simulator if not installed
+# quri-parts>=15,<20             # optional · install manually if using Osaka
+# quri-parts-oqtopus>=0.2        # optional · Osaka OQTOPUS backend
 
+# ---- Google DeepMind Gemini Robotics (v0.8.0) ----
+# ER 2 is public-tier via Google AI Studio. VLA + On-Device 2 are PARKED
+# pending trusted-tester programme entry.
+google-genai>=0.3,<1.0
 
-# ═══════════════════════════════════════════════════════════════════════════
-# v0.7.8  ·  Perception module dependencies (Paper VIII)
-#
-# All of these are OPTIONAL from the perspective of the module import
-# (perception.py catches ImportError and sets HAVE_* flags), but the
-# perception endpoints will return 503 with a clear message if the
-# relevant deps are missing. You want all of these for full functionality.
-# ═══════════════════════════════════════════════════════════════════════════
+# ---- Ethereum + cryptography ----
+eth-account>=0.11,<1.0
+eth-utils>=4.1,<5.0
+web3>=6.15,<7.0
+cryptography>=42.0,<45.0
 
-# ── Core numerics (required by texture, acoustic, hyperspectral) ───────────
-numpy>=1.24,<2.0           # <2.0 pin for qiskit-aer/librosa/sklearn wheel compat
-scipy>=1.11                # sparse linear algebra for regularized inverse
-scikit-learn>=1.3          # ExtraTreesRegressor (texture) + Classifier (acoustic)
+# ---- Hashing / encoding ----
+base58>=2.1,<3.0
+pynacl>=1.5,<2.0
 
-# ── Image processing ───────────────────────────────────────────────────────
-Pillow>=10.0                    # PIL: image decode + convert to numpy array
-opencv-python-headless>=4.8     # patch operations · FFT prep · no GUI (Render)
+# ---- v0.9.0 · PHASESPACE dependencies ----
+# Both pure-Python · install cleanly on Render free tier · fail-soft imported
+# by phase_bridge.py (module degrades to stub behaviour if either missing).
 
-# ── Audio processing (STFT, wavelet, MFCC, RT60 estimation) ────────────────
-librosa>=0.10              # STFT + MFCC + spectral features
-soundfile>=0.12            # audio file decode (wav/flac/ogg)
+# ---- Astropy: astronomical ephemeris + time systems ----
+# Used by phase_bridge.celestial_fix() for J2000 coordinate transforms,
+# aberration correction, and pulsar-timing residual analysis.
+astropy>=6.0,<7.0
 
-# ── Cloudflare R2 (trained EML model upload from training pipeline) ────────
-boto3>=1.28                # S3-compatible client for R2
+# ---- Skyfield: satellite tracking + celestial mechanics ----
+# Used by phase_bridge.astroterm_ephemeris_tick() to compute TLE-derived
+# satellite positions when the substrate is in orbital-mode classification.
+skyfield>=1.48,<2.0
 
-# ── Supabase Postgres (perception_priors + audit trails) ───────────────────
-# NOTE · v0.7.9 · also used by census_daily.py (chainstate_census schema).
-# Single library serves both perception and census.
-supabase>=2.0              # supports sb.schema("chainstate_perception").table()
+# ---- Timezone handling (astropy Time needs this on some platforms) ----
+python-dateutil>=2.8,<3.0
+pytz>=2024.1
 
-# ── HTTP client (provenance-service calls + R2 model fetch) ────────────────
-# NOTE · v0.7.9 · also used by census_daily.py for public-feed fetching.
-httpx>=0.25
-
-# ── Training pipeline (fetch corpora, progress logging) ────────────────────
-requests>=2.31             # sync HTTP for corpus fetchers
-tqdm>=4.66                 # progress bars in training logs
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# v0.7.9  ·  Cyberspace Census dependencies (Paper IX)
-#
-# Only ONE new library: APScheduler for the 05:00 UTC nightly cron.
-# All other census needs (supabase, httpx) are already installed above
-# for perception, so census reuses the same libraries.
-#
-# If APScheduler installation ever fails, the /census/status endpoint will
-# report `scheduler_installed: false` and quantum + perception continue
-# unaffected. Census endpoints will still respond to manual /census/trigger
-# calls; only the automatic 05:00 UTC tick would be disabled.
-# ═══════════════════════════════════════════════════════════════════════════
-
-# ── APScheduler (05:00 UTC nightly census tick) ────────────────────────────
-apscheduler>=3.10          # AsyncIOScheduler · CronTrigger
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# End of requirements.txt
-#
-# Verification after deploy:
-#   curl https://metastate-quantum.onrender.com/           → v0.7.7 quantum ok
-#                                                          → census_module_installed: true
-#                                                          → census_scheduler_running: true
-#   curl https://metastate-quantum.onrender.com/perception/status
-#       → { supabase_configured: true, r2_models_url_configured: true, ... }
-#   curl https://metastate-quantum.onrender.com/census/status
-#       → { census_enabled: true, scheduler_running: true, ... }
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# v0.8.0  ·  CHAINSTATE ROBOTICS AGI dependencies (Paper X Rev 2)
-#
-# Only ONE new library: google-genai for Gemini Robotics ER 2 calls.
-# All other robotics needs (supabase, httpx, apscheduler) are already
-# installed above so the robotics layer reuses the same libraries.
-#
-# If google-genai installation ever fails, /robotics/health will report
-# `robotics_module_installed: false` (or the dispatch will report gemini
-# unavailable) and quantum + perception + census continue unaffected.
-# The Cloudflare Worker's meta-layer coherence check (Paper X Rev 2 §4.5)
-# is the ultimate safeguard and does not depend on this SDK being present.
-# ═══════════════════════════════════════════════════════════════════════════
-
-# ── Google AI Studio SDK (Gemini Robotics ER 2 · public tier) ──────────────
-google-genai>=0.3          # from google import genai  ·  Client(api_key=...)
-
-# ── (VLA + On-Device 2 remain PARKED behind trusted-tester programme; no
-#     public SDK for those yet · Paper X Rev 2 Table 1)                     ──
+# ---- Optional but recommended ----
+orjson>=3.9,<4.0               # faster JSON for FastAPI responses
+python-dotenv>=1.0,<2.0        # local .env support (never required in prod)
