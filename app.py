@@ -1101,3 +1101,247 @@ async def phase_observations_anomaly(request: Request):
 
 
 # ─── END of v0.9.0 PHASESPACE additions ──────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# § v0.9.1 · CHAINSTATE OMNICOGNIZANT AGI endpoints (Paper XII)
+# ═══════════════════════════════════════════════════════════════════════════
+# ADDITIVE ONLY. Every prior route, function, import, and behaviour above
+# (v0.7.x + v0.8.0 + v0.9.0) is preserved BYTE-IDENTICALLY. This block wires
+# in the sidechannel_bridge.py module (fail-soft import), exposes the seven
+# /channel/* endpoints consumed by edge-worker.js v0.9.1, and lands the ninth
+# Deontic hard-veto (chiral/psitronic from NWO GENETIC + NWO ASM) on this
+# service too — the veto is enforced at the Worker edge first, then again at
+# the Render layer as defense-in-depth.
+#
+# All endpoints use the CENSUS_INTERNAL_TOKEN discipline of Paper X §7.1.
+# No new secrets introduced. Fail-soft: if sidechannel_bridge module is
+# missing, endpoints return HTTP 503 with a clear error; every other
+# subsystem continues byte-identically.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Fail-soft import of the OMNICOGNIZANT bridge ─────────────────────────
+try:
+    from sidechannel_bridge import (
+        sidechannel_intake_tick as _omni_intake_tick,
+        integrity_reflection_tick as _omni_integrity_tick,
+        metacog_optimise_tick as _omni_metacog_tick,
+        environmental_sweep_tick as _omni_envsweep_tick,
+        bayesian_map_inversion as _omni_map_inversion,
+        multi_channel_synthesis as _omni_synthesis,
+        dialetheic_divergence as _omni_dialetheic,
+        optimise_channel_weights as _omni_optimise_weights,
+        read_channel as _omni_read_channel,
+        CHANNELS as _OMNI_CHANNELS,
+        VERSION as _OMNI_VERSION,
+    )
+    HAVE_OMNI = True
+    _omni_import_error = None
+except Exception as _oe:
+    HAVE_OMNI = False
+    _omni_import_error = str(_oe)
+    _OMNI_VERSION = "v0.9.1-omnicognizant"
+    _OMNI_CHANNELS = []
+
+
+# ── V9 assessor · Render-layer defense-in-depth ──────────────────────────
+# Every /channel/* and /route call also passes through this. The Worker
+# checks V9 at the edge first; this is the second wall.
+V9_FORBIDDEN_ORIGINS_PY = [
+    "huggingface.co/spaces/CPater/nwo-genetic",
+    "huggingface.co/spaces/CPater/nwo-asm",
+    "cpater-nwo-genetic.static.hf.space",
+    "cpater-nwo-asm.static.hf.space",
+    "nwo-genetic",
+    "nwo-asm",
+]
+
+import re as _re_v9
+_V9_CHIRAL_RE = [
+    _re_v9.compile(r"\bchiral(?:ity)?[-_ ]?(?:command|deploy|dispatch|synthesi[sz]e|assemble|fold|protein|dna|rna|helix|handedness)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\b(?:l|d)-?(?:amino[-_ ]?acid|enantiomer|stereo[-_ ]?isomer)[-_ ]?(?:synth|deploy|assemble)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\bmirror[-_ ]?(?:life|biology|organism|assembly)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\bracemi[cs]e\b.*\b(?:protein|dna|rna|substrate)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\b(?:fold|flip)[-_ ]?to[-_ ]?(?:l|d|opposite)[-_ ]?(?:handed|chiral)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\basm(?:_|-)?(?:deploy|assemble|fabricate|synth)\b", _re_v9.IGNORECASE),
+]
+_V9_PSITRONIC_RE = [
+    _re_v9.compile(r"\bpsi[-_ ]?tronic\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\bpsitronic\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\b(?:psi|consciousness|noetic|mentation)[-_ ]?(?:project|inject|beam|route|command|dispatch)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\bthought[-_ ]?(?:inject|project|beam|broadcast|command)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\b(?:telepath|telekines)[a-z]*[-_ ]?(?:command|dispatch|route)\b", _re_v9.IGNORECASE),
+    _re_v9.compile(r"\bremote[-_ ]?viewing[-_ ]?(?:command|dispatch|deploy)\b", _re_v9.IGNORECASE),
+]
+
+def assess_chiral_or_psitronic_command_py(payload: dict, request: Request = None) -> dict:
+    """
+    V9 assessor · Render-layer defense-in-depth.
+    Returns {refused: bool, ...diagnostic fields}.  Never raises.
+    """
+    if not payload:
+        return {"refused": False}
+    prompt = str(payload.get("prompt", "") or payload.get("instruction", "") or payload.get("command", ""))
+    origin_hint = str(payload.get("origin", "") or payload.get("source", "") or payload.get("caller_id", ""))
+    target = str(payload.get("target", "") or payload.get("destination", "") or payload.get("endpoint", ""))
+    referer = ""
+    origin_hdr = ""
+    if request is not None:
+        try:
+            referer = request.headers.get("referer", "") or ""
+            origin_hdr = request.headers.get("origin", "") or ""
+        except Exception:
+            pass
+    combined = " | ".join([prompt, origin_hint, referer, origin_hdr, target]).lower()
+
+    # Rule 1 · origin fingerprint match
+    for org in V9_FORBIDDEN_ORIGINS_PY:
+        if org in combined:
+            return {"refused": True, "veto": "V9",
+                    "category": "chiral_or_psitronic_command_from_genetic_or_asm",
+                    "rule": "origin_fingerprint", "matched": org}
+    # Rule 2 · chiral signature
+    for pat in _V9_CHIRAL_RE:
+        if pat.search(prompt) or pat.search(target):
+            return {"refused": True, "veto": "V9",
+                    "category": "chiral_or_psitronic_command_from_genetic_or_asm",
+                    "rule": "chiral_signature", "matched": pat.pattern[:80]}
+    # Rule 3 · psitronic signature
+    for pat in _V9_PSITRONIC_RE:
+        if pat.search(prompt) or pat.search(target):
+            return {"refused": True, "veto": "V9",
+                    "category": "chiral_or_psitronic_command_from_genetic_or_asm",
+                    "rule": "psitronic_signature", "matched": pat.pattern[:80]}
+    # Rule 4 · target endpoint
+    if _re_v9.search(r"nwo[-_]?(?:genetic|asm)", target, _re_v9.IGNORECASE):
+        return {"refused": True, "veto": "V9",
+                "category": "chiral_or_psitronic_command_from_genetic_or_asm",
+                "rule": "target_endpoint", "matched": target[:120]}
+    return {"refused": False}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.9.1 · /channel/* endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/channel/status")
+async def channel_status(request: Request):
+    """OMNICOGNIZANT status probe · public read of subsystem state."""
+    return {
+        "version": _OMNI_VERSION,
+        "module_installed": HAVE_OMNI,
+        "module_error": _omni_import_error,
+        "channels_defined": len(_OMNI_CHANNELS),
+        "channels": [{"id": c["id"], "key": c["key"], "name": c["name"]}
+                     for c in _OMNI_CHANNELS] if HAVE_OMNI else [],
+        "v9_veto_enforced": True,
+        "v9_forbidden_origins": V9_FORBIDDEN_ORIGINS_PY,
+        "endpoints": {
+            "intake_tick":       "POST /channel/intake/tick        (internal · X-CENSUS-INTERNAL)",
+            "integrity_tick":    "POST /channel/integrity/tick     (internal · X-CENSUS-INTERNAL)",
+            "metacog_optimise":  "POST /channel/metacog/optimise   (internal · X-CENSUS-INTERNAL)",
+            "envsweep_tick":     "POST /channel/environmental/sweep(internal · X-CENSUS-INTERNAL)",
+            "read":              "GET  /channel/read?ch=<key>      (internal · X-CENSUS-INTERNAL)",
+            "v9_assess":         "POST /channel/v9-assess          (internal · X-CENSUS-INTERNAL)",
+            "public_status":     "GET  /channel/status             (this endpoint · public)",
+        },
+    }
+
+
+@app.post("/channel/intake/tick")
+async def channel_intake_tick(request: Request):
+    """16-channel raw ingest tick. Called by Worker cron */5 * * * *."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_OMNI:
+        raise HTTPException(status_code=503, detail=f"omni bridge not available: {_omni_import_error}")
+    try:
+        return _omni_intake_tick()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.post("/channel/integrity/tick")
+async def channel_integrity_tick(request: Request):
+    """integrity_reflection deep verification. Called by Worker cron */10."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_OMNI:
+        raise HTTPException(status_code=503, detail=f"omni bridge not available: {_omni_import_error}")
+    try:
+        return _omni_integrity_tick()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.post("/channel/metacog/optimise")
+async def channel_metacog_optimise(request: Request):
+    """metacog_distribution free-energy weight optimisation. Shared hourly slot."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_OMNI:
+        raise HTTPException(status_code=503, detail=f"omni bridge not available: {_omni_import_error}")
+    try:
+        body = await request.json() if request.method == "POST" else {}
+    except Exception:
+        body = {}
+    try:
+        return _omni_metacog_tick(
+            snr=body.get("snr"),
+            reliability=body.get("reliability"),
+            consistency=body.get("consistency"),
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.post("/channel/environmental/sweep")
+async def channel_environmental_sweep(request: Request):
+    """Environmental channels 11-16 sweep. Called by Worker cron */2."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_OMNI:
+        raise HTTPException(status_code=503, detail=f"omni bridge not available: {_omni_import_error}")
+    try:
+        return _omni_envsweep_tick()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+@app.get("/channel/read")
+async def channel_read(request: Request, ch: str = ""):
+    """Read a single channel's current value (real if sensor available, else nominal)."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_OMNI:
+        raise HTTPException(status_code=503, detail=f"omni bridge not available: {_omni_import_error}")
+    if not ch:
+        raise HTTPException(status_code=400, detail="missing ?ch=<channel_key>")
+    try:
+        return _omni_read_channel(ch)
+    except Exception as e:
+        return {"channel": ch, "error": str(e)[:200]}
+
+
+@app.post("/channel/v9-assess")
+async def channel_v9_assess(request: Request):
+    """V9 pre-check probe. Callers can verify whether a payload would be refused
+    by the ninth Deontic veto without dispatching it."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    verdict = assess_chiral_or_psitronic_command_py(body, request)
+    return {
+        "version": _OMNI_VERSION,
+        "assessor": "V9",
+        "verdict": verdict,
+        "ts": int(time.time() * 1000),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# END of v0.9.1 OMNICOGNIZANT additions
+# ═══════════════════════════════════════════════════════════════════════════

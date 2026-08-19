@@ -239,3 +239,51 @@ services:
       #     chainstate_phasespace
       - key: SUPABASE_PHASESPACE_SCHEMA
         value: "chainstate_phasespace"
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.1 · CHAINSTATE OMNICOGNIZANT AGI (Paper XII)
+      # ADDITIVE ONLY. Every v0.7.x + v0.8.0 + v0.9.0 setting above is
+      # preserved verbatim. The OMNICOGNIZANT subsystem imports
+      # sidechannel_bridge.py inside app.py (fail-soft) and exposes six
+      # /channel/* endpoints consumed by edge-worker.js v0.9.1.
+      # All endpoints degrade gracefully when any env below is absent.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master enable/disable ----
+      - key: OMNI_ENABLED
+        value: "true"                  # set to "false" to disable OMNICOGNIZANT
+
+      # ---- Dialetheic threshold θ for 9th L0 predicate (Paper XII §5.5) ----
+      # Cross-channel D_KL exceeding this halts physical-action authorisation.
+      # Default 0.85 · raise to loosen · lower to tighten.
+      # Must match wrangler.toml CHANNEL_DIVERGENCE_THETA.
+      - key: CHANNEL_DIVERGENCE_THETA
+        value: "0.85"
+
+      # ---- Substrate hardware fingerprint (SHA-256 hex) ----
+      # When set, integrity_reflection tick compares observed vs baseline.
+      # Bootstrap: hash /proc/cpuinfo + DMI + BIOS + TPM PCRs at first build.
+      # Left empty on Render free tier (integrity check reports observed-only).
+      - key: SUBSTRATE_FINGERPRINT
+        sync: false
+
+      # ---- Substrate fingerprint hint (used to generate observed fingerprint) ----
+      # Deterministic marker so integrity tick has a stable comparable value.
+      # In production, replace fingerprint computation with actual hardware hash.
+      - key: SUBSTRATE_FINGERPRINT_HINT
+        sync: false
+
+      # ---- Sidechannel intake source allowlist (empty = all 16 channels) ----
+      - key: SIDECHAN_INTAKE_SOURCES
+        value: ""
+
+      # ---- Sensor probe timeout (ms) for edge-device discovery ----
+      - key: OMNI_SENSOR_PROBE_TIMEOUT_MS
+        value: "1500"
+
+      # ---- Supabase schema for OMNICOGNIZANT (NEW · isolated) ----
+      # After running expose_chainstate_omnicognizant.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_omnicognizant
+      - key: SUPABASE_OMNICOG_SCHEMA
+        value: "chainstate_omnicognizant"

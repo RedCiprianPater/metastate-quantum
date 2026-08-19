@@ -1,5 +1,5 @@
 # =============================================================================
-# metastate-quantum · requirements.txt · v0.9.0
+# metastate-quantum · requirements.txt · v0.9.1 OMNICOGNIZANT
 # Full drop-in file (not a patch)
 # =============================================================================
 # Complete dependency set covering all subsystems:
