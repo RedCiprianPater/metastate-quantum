@@ -287,3 +287,126 @@ services:
       #     chainstate_omnicognizant
       - key: SUPABASE_OMNICOG_SCHEMA
         value: "chainstate_omnicognizant"
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.2 · CHAINSTATE C-FIELD AGI ARRAY (Paper XIII)
+      # ADDITIVE ONLY. Every v0.7.x + v0.8.0 + v0.9.0 + v0.9.1 setting above
+      # is preserved byte-identically. The C-FIELD subsystem imports
+      # cfield_bridge.py inside app.py (fail-soft) and exposes 13 /cfield/*
+      # endpoints (7 public GET + 6 internal POST) consumed by
+      # edge-worker.js v0.9.2. All endpoints degrade gracefully when any
+      # env below is absent.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master enable/disable ----
+      - key: CFIELD_ENABLED
+        value: "true"                  # set to "false" to disable all C-FIELD
+                                       # functions without removing this section
+
+      # ---- ICNIRP amplitude cap · defense-in-depth mirror of Worker cap ----
+      # Must be identical to Cloudflare Worker CFIELD_ICNIRP_CAP_UT env.
+      # Amplitude cap 100 μT is 10× below WHO/ICNIRP occupational limit.
+      # A layer-mismatch check raises an infrastructure alarm on divergence.
+      - key: CFIELD_ICNIRP_CAP_UT
+        value: "100"                   # microtesla · dual-layer verified
+
+      # ---- Minimum public indicator count for c_hat estimation ----
+      - key: CFIELD_MIN_INDICATORS
+        value: "12"                    # N ≥ 12 required · else observe-only
+
+      # ---- Dialetheic θ for attribution (3σ guard on D_KL over classes) ----
+      # If any single-class posterior D_KL exceeds θ, the attribution result
+      # is discarded and observe-only posture is retained for the target zone.
+      - key: CFIELD_DIALETHEIC_THETA
+        value: "0.85"                  # must match Worker CFIELD_DIALETHEIC_THETA
+
+      # ---- Ridge regularisation λ_a for MAP inversion of disturbance vector ----
+      # Used by cfield_bridge.map_invert_disturbance() closed-form solver.
+      - key: CFIELD_RIDGE_LAMBDA
+        value: "0.10"                  # default per Paper XIII §5.2
+
+      # ---- Ideological axis divergence threshold ----
+      # If c_hat vs. counterfactual objective baseline exceeds this on the
+      # dominant adversarial-class axis, the substrate flags for review.
+      - key: CFIELD_IDEOLOGICAL_AXIS_THRESHOLD
+        value: "0.6"
+
+      # ---- EML shadow-substrate mode (SIMULATION by default) ----
+      # In "true" mode all beam dispatches run against the trained EML model
+      # only. Transition to live physical operation requires MANUAL admin
+      # action at BOTH Worker AND Render layers. The substrate cannot
+      # self-authorise its own escalation.
+      - key: CFIELD_EML_SIMULATION_MODE
+        value: "true"                  # KEEP TRUE until physical array built
+
+      # ---- EML training corpus max samples per recycle epoch ----
+      - key: CFIELD_EML_MAX_SAMPLES
+        value: "1000"                  # per 12-hour recycle tick
+
+      # ---- Alternative device output plane discovery ----
+      # Ultrasound transducers, piezoelectric actuators, low-power RF,
+      # medical coil arrays. Substrate-owned only; discovered via the same
+      # four-step ladder as Paper XII sensors.
+      - key: CFIELD_ALT_DEVICE_ENABLED
+        value: "true"
+
+      # ---- Ingo Swann calibration parameters (SIM · beamform-tuning only) ----
+      # S1..S4 psi-adjacent parameters treated as offsets in the phase-array
+      # beamforming computation. Publicly audited via /cfield/swann/status.
+      # No physical claim about distance-independence or observer effect;
+      # these are diagnostic parameters only.
+      - key: CFIELD_SWANN_CALIBRATION_ENABLED
+        value: "true"
+
+      # ---- Quantum simulation dispatch ladder (5-tier fallback) ----
+      # PRIMARY tried first; FALLBACK if primary unavailable. Beyond FALLBACK
+      # the ladder continues: Origin Wukong → Osaka QIQB → Aer local →
+      # Worker numpy statevector. NWO ASM path is architecturally excluded.
+      - key: CFIELD_QUANTUM_SIM_PRIMARY
+        value: "ibm"                   # ibm | origin | osaka | aer | numpy
+      - key: CFIELD_QUANTUM_SIM_FALLBACK
+        value: "aer"                   # ibm | origin | osaka | aer | numpy
+
+      # ---- Supabase schema (isolated from all prior schemas) ----
+      # After running expose_chainstate_cfield.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_cfield
+      # This is separate from every prior chainstate_* schema; both must be
+      # exposed if both v0.9.1 and v0.9.2 features are wanted.
+      - key: SUPABASE_CFIELD_SCHEMA
+        value: "chainstate_cfield"
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.2 · SECRETS (sync: false — set in Render Dashboard)
+      # Generate each with: openssl rand -hex 32
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- CFIELD admin key (personal-only, never transmitted externally) ----
+      # Required for admin ops: EML mode transitions, source allowlist edits,
+      # emergency rollback triggers. Not consumed by any cron subsystem.
+      - key: CFIELD_ADMIN_KEY
+        sync: false
+
+      # ---- Beam dispatch HMAC · mirror of Worker BEAM_DISPATCH_HMAC ----
+      # Every beam dispatch payload signed by Worker and re-verified at Render
+      # via this shared secret. Layer mismatch raises infrastructure alarm.
+      - key: BEAM_DISPATCH_HMAC
+        sync: false
+
+      # ---- Alt-device manifest HMAC · mirror of Worker ALT_DEVICE_HMAC ----
+      # Alternative device discovery manifest (ultrasound, piezoelectric, RF,
+      # medical coil) signed by Worker and verified at Render.
+      - key: ALT_DEVICE_HMAC
+        sync: false
+
+      # ---- Swann calibration snapshot HMAC · daily 12:00 UTC audit ----
+      # Every Swann calibration snapshot signed with this shared secret.
+      # Publicly readable via /cfield/swann/status.
+      - key: SWANN_CALIBRATION_HMAC
+        sync: false
+
+      # ---- Quantum simulation dispatch token · 5-tier ladder auth ----
+      # Shared with Worker CFIELD_QUANTUM_SIM_TOKEN. Every quantum-sim
+      # dispatch attaches this token for the Worker→Render bridge.
+      - key: CFIELD_QUANTUM_SIM_TOKEN
+        sync: false

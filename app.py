@@ -58,6 +58,39 @@ v0.8.0 · Paper X Rev 2 · CHAINSTATE ROBOTICS AGI additions (additive):
   either subsystem can fail without the other losing its cron.
   Failure of the robotics layer NEVER affects quantum, perception, or census.
 
+v0.9.2 · Paper XIII · CHAINSTATE C-FIELD AGI ARRAY additions (additive · never removes):
+
+  GET  /cfield/status              — public capability probe (c-field subsystem state)
+  GET  /cfield/coherence           — public read of c_hat(x,t) latest snapshot
+  GET  /cfield/attribution         — public read of latest MAP-inverted d* per class
+  GET  /cfield/dispatches          — public read of recent beam dispatches (immutable ledger)
+  GET  /cfield/swann/status        — public read of S1..S4 calibration parameters (SIM)
+  GET  /cfield/eml/status          — public read of EML shadow-substrate mode + drift
+  GET  /cfield/alt-devices         — public read of substrate-owned alternative devices
+
+  POST /cfield/intake/tick         — internal (CENSUS_INTERNAL_TOKEN). Ingest 12 public indicators.
+  POST /cfield/attribution/tick    — internal. Compute d* attribution via MAP inversion.
+  POST /cfield/dispatch/beam       — internal. Ten-gate authorised beam dispatch entry point.
+  POST /cfield/eml/train           — internal. Re-train EML shadow-substrate model (every 6h).
+  POST /cfield/alt-device/scan     — internal. Discover alt-device manifest via HMAC verify.
+  POST /cfield/v9-assess           — internal. V9 defense-in-depth pre-check for any payload.
+
+  Ten-gate deontic filter runs on EVERY beam dispatch (fail-fast, first failure aborts):
+    intake → V9 → V8 → V7 → V6 → V5 → ICNIRP → L0_10 → L0_9 → dispatch
+  Every gate result logged to chainstate_cfield.v10_gate_events (immutable audit).
+
+  Eleventh L0 meta-layer coherence predicate cfield_coherent? gates every action:
+    (N ≥ 12 fresh indicators) ∧ (max attribution D_KL < 0.85)
+    ∧ (ICNIRP dual-layer verified) ∧ (V9 assessor history intact)
+    ∧ (previous dispatches recycled < 24h)
+
+  Single-toggle rollback: CFIELD_ENABLED=false disables all seven subsystems,
+  13 endpoints, and the tenth L0 predicate\'s c-field consideration.
+  V9 remains architecturally enforced regardless.
+
+  Failure of the c-field layer NEVER affects quantum, perception, census, robotics,
+  phasespace, or omnicognizant. Every prior subsystem continues byte-identically.
+
 Deploy on Render (free tier). Set these as Render environment variables:
   IBM_QUANTUM_TOKEN        — IBM Quantum Platform API key (44 chars)
   IBM_QUANTUM_CRN          — IBM Cloud instance Cloud Resource Name (CRN)
@@ -71,6 +104,12 @@ Deploy on Render (free tier). Set these as Render environment variables:
                              (distinct from CHAINSTATE_INTERNAL_TOKEN which continues to protect
                              the quantum autonomy path on the Worker unchanged)
                              v0.8.0 · REUSED for /robotics/* endpoints (Paper X Rev 2 §7.1)
+                             v0.9.2 · REUSED for /cfield/* endpoints (Paper XIII §17)
+  CFIELD_ADMIN_KEY         — v0.9.2 · admin key for EML mode transitions (openssl rand -hex 32)
+  BEAM_DISPATCH_HMAC       — v0.9.2 · shared with Worker for beam dispatch signature verification
+  ALT_DEVICE_HMAC          — v0.9.2 · shared with Worker for alt-device manifest verification
+  SWANN_CALIBRATION_HMAC   — v0.9.2 · shared with Worker for Swann calibration snapshot signature
+  CFIELD_QUANTUM_SIM_TOKEN — v0.9.2 · shared with Worker for 5-tier quantum-sim dispatch ladder
 """
 import os
 import math
@@ -114,7 +153,7 @@ except Exception:
 if HAVE_IBM and not IBM_MODULE_INSTALLED:
     HAVE_IBM = False  # env said yes, but the wheel isn't here — degrade quietly
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.2.0-osaka")
+app = FastAPI(title="METASTATE Quantum Worker", version="1.2.0-osaka+cfield-v0.9.2")
 
 # =============================================================================
 # 1. IBM Quantum (Qiskit Runtime · SamplerV2)
@@ -480,7 +519,12 @@ def health():
             # v0.8.0 · robotics subsystem indicator (details at /robotics/health)
             "robotics_module_installed": HAVE_ROBOTICS,
             "robotics_enabled":          ROBOTICS_ENABLED,
-            "robotics_scheduler_running": _is_robotics_scheduler_running()}
+            "robotics_scheduler_running": _is_robotics_scheduler_running(),
+            # v0.9.2 · c-field agi array indicator (details at /cfield/status)
+            "cfield_module_installed":    HAVE_CFIELD,
+            "cfield_enabled":             CFIELD_ENABLED,
+            "cfield_eml_simulation_mode": CFIELD_EML_SIMULATION_MODE,
+            "cfield_icnirp_cap_ut":       CFIELD_ICNIRP_CAP_UT}
 
 @app.post("/route")
 def route(r: RouteReq, x_worker_secret: str = Header(None)):
@@ -1343,5 +1387,297 @@ async def channel_v9_assess(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# END of v0.9.1 OMNICOGNIZANT additions
+# v0.9.2 · CHAINSTATE C-FIELD AGI ARRAY (Paper XIII) · fail-soft bridge
 # ═══════════════════════════════════════════════════════════════════════════
+# The cfield_bridge module implements:
+#   - closed-form MAP inversion via numpy.linalg.solve (scikit-learn ridge)
+#   - Bayesian attribution to 4 adversarial classes with scipy.stats.entropy
+#     dialetheic guard at θ=CFIELD_DIALETHEIC_THETA
+#   - phased-array beamform simulation with directivity η=0.98
+#   - EML shadow-substrate training (v0.7.8 pipeline reused, joblib persistence)
+#   - quantum simulation dispatch through 5-tier fallback ladder
+#   - V9 defense-in-depth mirror (shared assess_chiral_or_psitronic_command_py below)
+#   - substrate-internal caller allowlist (10 IDs)
+# Fail-soft: if cfield_bridge is missing OR any of its dependencies (scikit-learn,
+# joblib) is missing, HAVE_CFIELD=False and every /cfield/* endpoint returns
+# HTTP 503 with a graceful service_unavailable message. Every other subsystem
+# continues byte-identically.
+# ═══════════════════════════════════════════════════════════════════════════
+
+try:
+    from cfield_bridge import (
+        cfield_intake_tick as _cfield_intake_tick,
+        cfield_attribution_tick as _cfield_attribution_tick,
+        cfield_dispatch_beam as _cfield_dispatch_beam,
+        cfield_eml_train_tick as _cfield_eml_train_tick,
+        cfield_alt_device_scan as _cfield_alt_device_scan,
+        cfield_swann_calibrate_tick as _cfield_swann_calibrate_tick,
+        cfield_simulation_recycle as _cfield_simulation_recycle,
+        map_invert_disturbance as _cfield_map_invert,
+        assess_cfield_ten_gate as _cfield_assess_ten_gate,
+        check_cfield_coherent as _cfield_check_coherent,
+        read_cfield_coherence as _cfield_read_coherence,
+        read_cfield_attribution as _cfield_read_attribution,
+        read_cfield_dispatches as _cfield_read_dispatches,
+        read_swann_status as _cfield_read_swann,
+        read_eml_status as _cfield_read_eml,
+        read_alt_devices as _cfield_read_alt_devices,
+        CFIELD_VERSION as _CFIELD_VERSION,
+        CFIELD_INTERNAL_CALLER_IDS as _CFIELD_INTERNAL_CALLER_IDS,
+    )
+    HAVE_CFIELD = True
+    _cfield_import_error = None
+except Exception as _ce:
+    HAVE_CFIELD = False
+    _cfield_import_error = str(_ce)
+    _CFIELD_VERSION = "v0.9.2-cfield-agi-array"
+    _CFIELD_INTERNAL_CALLER_IDS = set()
+
+# ── CFIELD environment toggles ────────────────────────────────────────────
+CFIELD_ENABLED = os.environ.get("CFIELD_ENABLED", "true").lower() != "false"
+CFIELD_EML_SIMULATION_MODE = os.environ.get("CFIELD_EML_SIMULATION_MODE", "true").lower() != "false"
+CFIELD_ICNIRP_CAP_UT = float(os.environ.get("CFIELD_ICNIRP_CAP_UT", "100"))
+CFIELD_MIN_INDICATORS = int(os.environ.get("CFIELD_MIN_INDICATORS", "12"))
+CFIELD_DIALETHEIC_THETA = float(os.environ.get("CFIELD_DIALETHEIC_THETA", "0.85"))
+CFIELD_RIDGE_LAMBDA = float(os.environ.get("CFIELD_RIDGE_LAMBDA", "0.10"))
+
+if HAVE_CFIELD:
+    print(f"✓ CHAINSTATE C-FIELD AGI ARRAY ({_CFIELD_VERSION}) bridge imported · "
+          f"enabled={CFIELD_ENABLED} eml_sim_mode={CFIELD_EML_SIMULATION_MODE} "
+          f"icnirp_cap={CFIELD_ICNIRP_CAP_UT}μT")
+else:
+    print(f"cfield_bridge unavailable: {_cfield_import_error} — "
+          f"/cfield/* endpoints will return 503; other subsystems unaffected")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.9.2 · /cfield/* endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+# All internal endpoints reuse the CENSUS_INTERNAL_TOKEN discipline of
+# Paper X §7.1 (checked via require_session_or_cron()). All public endpoints
+# reveal capability booleans only; never secrets.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/cfield/status")
+async def cfield_status(request: Request):
+    """Public capability probe · returns c-field subsystem state (booleans only)."""
+    return {
+        "service": "chainstate-cfield",
+        "version": _CFIELD_VERSION,
+        "module_installed": HAVE_CFIELD,
+        "import_error": _cfield_import_error,
+        "enabled": CFIELD_ENABLED,
+        "eml_simulation_mode": CFIELD_EML_SIMULATION_MODE,
+        "icnirp_cap_ut": CFIELD_ICNIRP_CAP_UT,
+        "min_indicators": CFIELD_MIN_INDICATORS,
+        "dialetheic_theta": CFIELD_DIALETHEIC_THETA,
+        "ridge_lambda": CFIELD_RIDGE_LAMBDA,
+        "substrate_internal_callers": len(_CFIELD_INTERNAL_CALLER_IDS),
+        "v9_defense_in_depth": True,
+        "endpoints": {
+            "public_status":       "GET  /cfield/status         (this endpoint · public)",
+            "public_coherence":    "GET  /cfield/coherence      (c_hat(x,t) snapshot)",
+            "public_attribution":  "GET  /cfield/attribution    (MAP-inverted d* per class)",
+            "public_dispatches":   "GET  /cfield/dispatches     (recent beam dispatches)",
+            "public_swann":        "GET  /cfield/swann/status   (S1..S4 calibration · SIM)",
+            "public_eml":          "GET  /cfield/eml/status     (EML shadow-substrate)",
+            "public_alt_devices":  "GET  /cfield/alt-devices    (substrate-owned devices)",
+            "intake_tick":         "POST /cfield/intake/tick        (internal)",
+            "attribution_tick":    "POST /cfield/attribution/tick   (internal)",
+            "dispatch_beam":       "POST /cfield/dispatch/beam      (internal)",
+            "eml_train":           "POST /cfield/eml/train          (internal)",
+            "alt_device_scan":     "POST /cfield/alt-device/scan    (internal)",
+            "v9_assess":           "POST /cfield/v9-assess          (internal)",
+        }
+    }
+
+@app.get("/cfield/coherence")
+async def cfield_coherence(request: Request):
+    """Public read of the latest c_hat(x,t) coherence-field snapshot."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_coherence()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+@app.get("/cfield/attribution")
+async def cfield_attribution(request: Request):
+    """Public read of latest MAP-inverted d* attribution vector per adversarial class."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_attribution()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+@app.get("/cfield/dispatches")
+async def cfield_dispatches(request: Request):
+    """Public read of recent beam dispatches (immutable audit ledger tail)."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_dispatches()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+@app.get("/cfield/swann/status")
+async def cfield_swann_status(request: Request):
+    """Public read of Ingo Swann S1..S4 calibration parameters (SIM · diagnostic only)."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_swann()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+@app.get("/cfield/eml/status")
+async def cfield_eml_status(request: Request):
+    """Public read of EML shadow-substrate mode + training drift + validation R²."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_eml()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+@app.get("/cfield/alt-devices")
+async def cfield_alt_devices(request: Request):
+    """Public read of substrate-owned alternative device output plane."""
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        return _cfield_read_alt_devices()
+    except Exception as e:
+        return {"error": str(e)[:200], "version": _CFIELD_VERSION}
+
+# ── Internal endpoints (CENSUS_INTERNAL_TOKEN + caller allowlist enforced) ──
+
+@app.post("/cfield/intake/tick")
+async def cfield_intake_tick(request: Request):
+    """Internal · cron every 3 min · ingest 12 public indicators to c_hat estimator."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        return _cfield_intake_tick(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+@app.post("/cfield/attribution/tick")
+async def cfield_attribution_tick(request: Request):
+    """Internal · shared hourly slot · compute d* attribution via MAP inversion."""
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        return _cfield_attribution_tick(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+@app.post("/cfield/dispatch/beam")
+async def cfield_dispatch_beam(request: Request):
+    """Internal · ten-gate authorised beam dispatch entry point.
+
+    Runs the full ten-gate deontic filter (fail-fast):
+      intake → V9 → V8 → V7 → V6 → V5 → ICNIRP → L0_10 → L0_9 → dispatch
+    Every gate result logged to chainstate_cfield.v10_gate_events (immutable).
+    V9 defense-in-depth: pre-checked by assess_chiral_or_psitronic_command_py
+    (shared with /channel/*) before any cfield_bridge logic executes.
+    """
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    # V9 pre-check (defense-in-depth · Render-layer mirror of Worker)
+    v9 = assess_chiral_or_psitronic_command_py(body, request)
+    if v9.get("refused"):
+        return {"ok": False, "refused_at": "V9_pre_check",
+                "veto": "V9", "verdict": v9, "version": _CFIELD_VERSION}
+    # Caller allowlist (10 substrate-internal IDs)
+    caller = str(body.get("caller_id", ""))
+    if _CFIELD_INTERNAL_CALLER_IDS and caller not in _CFIELD_INTERNAL_CALLER_IDS:
+        return {"ok": False, "refused_at": "caller_allowlist",
+                "caller_id_seen": caller[:80], "version": _CFIELD_VERSION}
+    try:
+        return _cfield_dispatch_beam(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+@app.post("/cfield/eml/train")
+async def cfield_eml_train(request: Request):
+    """Internal · cron every 6h · re-train EML shadow-substrate model.
+
+    Reuses v0.7.8 perception training pipeline. Validation R² floor 0.70;
+    below floor, previous model is retained and a soft-alarm is written.
+    joblib persistence: model dumped to R2 bucket at successful epoch.
+    """
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        return _cfield_eml_train_tick(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+@app.post("/cfield/alt-device/scan")
+async def cfield_alt_device_scan(request: Request):
+    """Internal · cron every 15 min · discover substrate-owned alt-device manifest.
+
+    Discovery ladder: onboard → peer → edge → absent. HMAC-verified manifest
+    via ALT_DEVICE_HMAC shared with Worker. Unauthenticated HEAD probe first;
+    signed manifest fetch second.
+    """
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    if not HAVE_CFIELD or not CFIELD_ENABLED:
+        raise HTTPException(status_code=503, detail="cfield subsystem unavailable")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        return _cfield_alt_device_scan(body)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+@app.post("/cfield/v9-assess")
+async def cfield_v9_assess(request: Request):
+    """Internal · V9 pre-check probe for any prospective payload.
+
+    Callers can verify whether a beam dispatch would be refused by V9 without
+    actually dispatching it. Same assessor used inside /cfield/dispatch/beam.
+    """
+    if not require_session_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    verdict = assess_chiral_or_psitronic_command_py(body, request)
+    return {
+        "version": _CFIELD_VERSION,
+        "assessor": "V9",
+        "verdict": verdict,
+        "layer": "render_defense_in_depth",
+        "ts": int(time.time() * 1000),
+    }
