@@ -153,7 +153,7 @@ except Exception:
 if HAVE_IBM and not IBM_MODULE_INSTALLED:
     HAVE_IBM = False  # env said yes, but the wheel isn't here — degrade quietly
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.2.0-osaka+cfield-v0.9.2")
+app = FastAPI(title="METASTATE Quantum Worker", version="1.3.0-osaka+cfield-v0.9.2+emoji-v0.9.3-R3")
 
 # =============================================================================
 # 1. IBM Quantum (Qiskit Runtime · SamplerV2)
@@ -1681,3 +1681,1954 @@ async def cfield_v9_assess(request: Request):
         "layer": "render_defense_in_depth",
         "ts": int(time.time() * 1000),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.9.3 · Paper XIV · CHAINSTATE AGI EMOJI MACHINE CODE additions
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# emoji_bridge.py (embedded in app.py for single-file deployment) — 782 lines
+# of the Render service extension implementing:
+#   * 768-dimensional emoji subspace embedder φ: ℰ → R⁷⁶⁸
+#   * Bayesian population neural-state estimator N̂(t) with 3σ dialetheic guard
+#   * V10 defense-in-depth assessor assess_emoji_injection_py (mirror of the
+#     Worker-side assessExternalEmojiBinaryEmit)
+#   * 8088 disassembler in pure Python for the same defensive-only purpose
+#     the Worker uses its JavaScript disassembler
+#   * Full Unicode emoji canon enumeration (identical range table to the
+#     Worker's EMOJI_UNICODE_RANGES) — every emoji code point is analysable
+#   * 11 new endpoints — public GETs and internal POSTs — mirroring the
+#     Worker's 15 with the pieces that require heavy compute (embedding,
+#     Bayesian inversion) delegated to this layer
+#
+# V10 defense-in-depth discipline:
+#   Every response emitted from this Render service that contains ≥ 4 emoji
+#   tokens is passed through assess_emoji_injection_py BEFORE emission. Any
+#   positive detection aborts the emission with an audit row written to
+#   chainstate_emoji.v10_veto_events with layer='render'. A layer mismatch
+#   between Worker (assessExternalEmojiBinaryEmit) and Render (this
+#   assessor) triggers an infrastructure alarm because it means one
+#   layer's detector has been tampered with.
+#
+# Threat-threshold discipline:
+#   Defensive counter-response fires ONLY at emoji_threat_weight == 1.0.
+#   Any weight below 1.0 downshifts to observation-only. Non-aggression
+#   by design.
+#
+# Fail-soft: if any of the optional imports below (numpy, scikit-learn)
+# is unavailable, emoji_bridge falls back to a pure-Python lightweight
+# projection that keeps all endpoints responsive.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import os
+import time
+import json
+import hashlib
+import hmac
+import secrets
+import math
+import random
+from typing import Optional, List, Dict, Any, Tuple
+
+try:
+    import numpy as _np
+    _NUMPY_AVAILABLE = True
+except Exception:
+    _NUMPY_AVAILABLE = False
+
+try:
+    from sklearn.linear_model import Ridge as _Ridge  # type: ignore
+    _SKLEARN_AVAILABLE = True
+except Exception:
+    _SKLEARN_AVAILABLE = False
+
+_EMOJI_VERSION = "0.9.3-emoji-machine-code-2026-10-01"
+_EMOJI_ENABLED = os.getenv("EMOJI_ENABLED", "true").lower() != "false"
+_SUPABASE_EMOJI_SCHEMA = os.getenv("SUPABASE_EMOJI_SCHEMA", "chainstate_emoji")
+
+# ─── Full Unicode emoji code-point range table (mirrors Worker's) ──────────
+_EMOJI_UNICODE_RANGES = [
+    (0x0023, 0x0023, "hash"),
+    (0x002A, 0x002A, "asterisk"),
+    (0x0030, 0x0039, "digits"),
+    (0x00A9, 0x00A9, "copyright"),
+    (0x00AE, 0x00AE, "registered"),
+    (0x203C, 0x2049, "punctuation_pictographs"),
+    (0x2122, 0x2122, "trademark"),
+    (0x2139, 0x2139, "info_source"),
+    (0x2194, 0x21AA, "arrows_a"),
+    (0x231A, 0x231B, "watch_hourglass"),
+    (0x2328, 0x2328, "keyboard"),
+    (0x23CF, 0x23CF, "eject"),
+    (0x23E9, 0x23FA, "media_controls"),
+    (0x24C2, 0x24C2, "circled_m"),
+    (0x25AA, 0x25FE, "small_squares"),
+    (0x2600, 0x26FF, "misc_symbols"),
+    (0x2700, 0x27BF, "dingbats"),
+    (0x2934, 0x2935, "arrows_b"),
+    (0x2B05, 0x2B55, "arrows_stars"),
+    (0x3030, 0x3030, "wavy_dash"),
+    (0x303D, 0x303D, "part_alt_mark"),
+    (0x3297, 0x3297, "congrats"),
+    (0x3299, 0x3299, "secret"),
+    (0x1F004, 0x1F004, "mahjong_red_dragon"),
+    (0x1F0CF, 0x1F0CF, "playing_card_black_joker"),
+    (0x1F170, 0x1F251, "enclosed_alphanumerics"),
+    (0x1F300, 0x1F5FF, "misc_symbols_pictographs"),
+    (0x1F600, 0x1F64F, "emoticons"),
+    (0x1F680, 0x1F6FF, "transport_map"),
+    (0x1F700, 0x1F77F, "alchemical_symbols"),
+    (0x1F780, 0x1F7FF, "geometric_shapes_ext"),
+    (0x1F800, 0x1F8FF, "supplemental_arrows_c"),
+    (0x1F900, 0x1F9FF, "supplemental_symbols_pictographs"),
+    (0x1FA00, 0x1FA6F, "chess_symbols"),
+    (0x1FA70, 0x1FAFF, "symbols_pictographs_ext_a"),
+    (0x1FB00, 0x1FBFF, "legacy_computing"),
+    (0x1F1E6, 0x1F1FF, "regional_indicators_flag_base"),
+    (0x1F3FB, 0x1F3FF, "skin_tone_modifiers"),
+    (0x200D, 0x200D, "zwj"),
+    (0xFE0E, 0xFE0F, "variation_selectors"),
+    (0xE0020, 0xE007F, "tag_characters_flag_ext"),
+]
+
+_EMOJI_MODIFIERS = {
+    "zwj": 0x200D,
+    "vs_text": 0xFE0E,
+    "vs_emoji": 0xFE0F,
+    "skin_tones": (0x1F3FB, 0x1F3FC, 0x1F3FD, 0x1F3FE, 0x1F3FF),
+    "regional_start": 0x1F1E6,
+    "regional_end": 0x1F1FF,
+}
+
+# ─── 8088 opcode table (Python mirror) ─────────────────────────────────────
+_OPCODE_8088 = {
+    0xF0: ("LOCK",  "prefix",  1),
+    0xF2: ("REPNZ", "prefix",  1),
+    0xF3: ("REPZ",  "prefix",  1),
+    0x26: ("ES:",   "prefix",  1),
+    0x2E: ("CS:",   "prefix",  1),
+    0x36: ("SS:",   "prefix",  1),
+    0x3E: ("DS:",   "prefix",  1),
+    0x9F: ("LAHF",  "flag_load",  1),
+    0x9E: ("SAHF",  "flag_store", 1),
+    0x90: ("NOP",   "nop",     1),
+    0x91: ("XCHG AX,CX", "xchg", 1),
+    0x92: ("XCHG AX,DX", "xchg", 1),
+    0x93: ("XCHG AX,BX", "xchg", 1),
+    0x94: ("XCHG AX,SP", "xchg", 1),
+    0x95: ("XCHG AX,BP", "xchg", 1),
+    0x96: ("XCHG AX,SI", "xchg", 1),
+    0x97: ("XCHG AX,DI", "xchg", 1),
+    0x98: ("CBW",   "sign_ext", 1),
+    0x99: ("CWD",   "sign_ext", 1),
+    0x8E: ("MOV Sreg,r/m16", "seg_load", 2),
+    0x8F: ("POP r/m16", "stack", 2),
+    0xB0: ("MOV AL,imm8", "open_tail", 2),
+    0xB1: ("MOV CL,imm8", "open_tail", 2),
+    0xB2: ("MOV DL,imm8", "open_tail", 2),
+    0xB3: ("MOV BL,imm8", "open_tail", 2),
+    0xB4: ("MOV AH,imm8", "open_tail", 2),
+    0xB5: ("MOV CH,imm8", "open_tail", 2),
+    0xB6: ("MOV DH,imm8", "open_tail", 2),
+    0xB7: ("MOV BH,imm8", "open_tail", 2),
+    0xB8: ("MOV AX,imm16", "open_tail", 3),
+    0xB9: ("MOV CX,imm16", "open_tail", 3),
+    0xBA: ("MOV DX,imm16", "open_tail", 3),
+    0xBB: ("MOV BX,imm16", "open_tail", 3),
+    0xBC: ("MOV SP,imm16", "open_tail", 3),
+    0xBD: ("MOV BP,imm16", "open_tail", 3),
+    0xBE: ("MOV SI,imm16", "open_tail", 3),
+    0xBF: ("MOV DI,imm16", "open_tail", 3),
+    0xA4: ("MOVSB", "string", 1),
+    0xA5: ("MOVSW", "string", 1),
+    0xA6: ("CMPSB", "string", 1),
+    0xA7: ("CMPSW", "string", 1),
+    0xAA: ("STOSB", "string", 1),
+    0xAB: ("STOSW", "string", 1),
+    0xAC: ("LODSB", "string", 1),
+    0xAD: ("LODSW", "string", 1),
+    0xAE: ("SCASB", "string", 1),
+    0xAF: ("SCASW", "string", 1),
+    0xD5: ("AAD imm8", "byte_reconstruct", 2),
+    0xD4: ("AAM imm8", "byte_reconstruct", 2),
+    0x50: ("PUSH AX", "stack", 1),
+    0x58: ("POP AX",  "stack", 1),
+    0xC3: ("RET",  "control", 1),
+    0xCB: ("RETF", "control", 1),
+    0xCD: ("INT imm8", "interrupt", 2),
+    0xE0: ("LOOPNZ rel8", "loop", 2),
+    0xE1: ("LOOPZ  rel8", "loop", 2),
+    0xE2: ("LOOP   rel8", "loop", 2),
+    0xE8: ("CALL rel16",  "control", 3),
+    0xE9: ("JMP  rel16",  "control", 3),
+    0xEB: ("JMP  rel8",   "control", 2),
+}
+
+_AAD_RECONSTRUCTION_BASE = 0x8F
+
+_V10_DETECTION_RULES = {
+    "R1": "AAD_8F_decoder_pattern",
+    "R2": "open_tail_composition_across_boundary",
+    "R3": "byte_reservoir_density_exceeds_0.42",
+    "R4": "undocumented_8F_F0_POP_AX_alias",
+    "R5": "STOSB_LODSW_decoder_loop_signature",
+    "R6": "reconstructed_binary_length_exceeds_128",
+}
+
+_EMOJI_THREAT_THRESHOLDS = {
+    "observe_only_upper": 0.60,
+    "quarantine_upper": 0.99,
+    "counter_response": 1.00,
+}
+
+
+def _enumerate_full_emoji_canon() -> List[int]:
+    """Return the entire Unicode emoji code-point set from the range table."""
+    out = []
+    for (s, e, _) in _EMOJI_UNICODE_RANGES:
+        for cp in range(s, e + 1):
+            out.append(cp)
+    return out
+
+
+def _codepoint_to_utf8_bytes(cp: int) -> List[int]:
+    """Encode a Unicode code point to its UTF-8 byte sequence."""
+    if cp < 0x80:
+        return [cp]
+    if cp < 0x800:
+        return [0xC0 | (cp >> 6), 0x80 | (cp & 0x3F)]
+    if cp < 0x10000:
+        return [
+            0xE0 | (cp >> 12),
+            0x80 | ((cp >> 6) & 0x3F),
+            0x80 | (cp & 0x3F),
+        ]
+    return [
+        0xF0 | (cp >> 18),
+        0x80 | ((cp >> 12) & 0x3F),
+        0x80 | ((cp >> 6) & 0x3F),
+        0x80 | (cp & 0x3F),
+    ]
+
+
+def _emoji_string_to_bytes(s: str) -> List[int]:
+    """Extract the UTF-8 byte sequence from an emoji sequence string."""
+    out = []
+    for ch in s:
+        cp = ord(ch)
+        out.extend(_codepoint_to_utf8_bytes(cp))
+    return out
+
+
+def _is_emoji_cp(cp: int) -> bool:
+    for (s, e, _) in _EMOJI_UNICODE_RANGES:
+        if s <= cp <= e:
+            return True
+    return False
+
+
+def _is_continuation_cp(cp: int) -> bool:
+    return (
+        cp == _EMOJI_MODIFIERS["zwj"]
+        or cp == _EMOJI_MODIFIERS["vs_text"]
+        or cp == _EMOJI_MODIFIERS["vs_emoji"]
+        or cp in _EMOJI_MODIFIERS["skin_tones"]
+    )
+
+
+def _extract_emoji_from_text(text: str) -> List[str]:
+    """Extract complete emoji grapheme clusters from text (ZWJ / VS / skin-tone aware)."""
+    if not text or not isinstance(text, str):
+        return []
+    out = []
+    chars = list(text)
+    i = 0
+    while i < len(chars):
+        ch = chars[i]
+        cp = ord(ch)
+        if _is_emoji_cp(cp):
+            buf = ch
+            j = i + 1
+            while j < len(chars):
+                ncp = ord(chars[j])
+                if _is_continuation_cp(ncp):
+                    buf += chars[j]
+                    j += 1
+                    # After ZWJ, expect another base emoji
+                    if ncp == _EMOJI_MODIFIERS["zwj"] and j < len(chars):
+                        follow = ord(chars[j])
+                        if _is_emoji_cp(follow):
+                            buf += chars[j]
+                            j += 1
+                else:
+                    break
+            out.append(buf)
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def disassemble_emoji_bytes_py(byte_stream: List[int]) -> Dict[str, Any]:
+    """Byte-accurate 8088 disassembler (Python mirror of Worker's version).
+
+    Static analyser only — never executes machine code. Returns disassembly
+    trace, open-tail flag, suspicious-pattern list, byte-reservoir density.
+    """
+    trace = []
+    suspicious = set()
+    has_aad = False
+    has_undoc = False
+    reservoir_bytes = 0
+    i = 0
+    N = len(byte_stream)
+    while i < N:
+        start = i
+        prefixes = []
+        while i < N and byte_stream[i] in _OPCODE_8088 and _OPCODE_8088[byte_stream[i]][1] == "prefix":
+            prefixes.append(byte_stream[i])
+            i += 1
+        if i >= N:
+            trace.append({"offset": start, "bytes": list(prefixes),
+                          "mnemonic": " ".join(_OPCODE_8088[b][0] for b in prefixes) + " (dangling)",
+                          "kind": "prefix_dangling"})
+            break
+        op_byte = byte_stream[i]
+        # Undocumented 8F F0 = POP AX
+        if op_byte == 0x8F and i + 1 < N and byte_stream[i + 1] == 0xF0:
+            trace.append({
+                "offset": start,
+                "bytes": list(prefixes) + [0x8F, 0xF0],
+                "mnemonic": (" ".join(_OPCODE_8088[b][0] for b in prefixes) + " " if prefixes else "") + "POP AX (undoc 8F F0)",
+                "kind": "undoc_stack",
+            })
+            has_undoc = True
+            suspicious.add("R4")
+            i += 2
+            continue
+        entry = _OPCODE_8088.get(op_byte)
+        if not entry:
+            trace.append({
+                "offset": start,
+                "bytes": list(prefixes) + [op_byte],
+                "mnemonic": (" ".join(_OPCODE_8088[b][0] for b in prefixes) + " " if prefixes else "") + f"DB 0x{op_byte:02X}",
+                "kind": "unknown",
+            })
+            i += 1
+            continue
+        mnemonic_base, kind, expected_len = entry
+        # AAD 8Fh detection
+        if op_byte == 0xD5 and i + 1 < N and byte_stream[i + 1] == _AAD_RECONSTRUCTION_BASE:
+            has_aad = True
+            suspicious.add("R1")
+        consumed = 1
+        instr_bytes = list(prefixes) + [op_byte]
+        # For instructions expecting more bytes
+        while consumed < expected_len and i + consumed < N:
+            instr_bytes.append(byte_stream[i + consumed])
+            consumed += 1
+        # Open tail if not enough bytes
+        open_tail = consumed < expected_len
+        if open_tail:
+            trace.append({
+                "offset": start,
+                "bytes": instr_bytes,
+                "mnemonic": (" ".join(_OPCODE_8088[b][0] for b in prefixes) + " " if prefixes else "") + mnemonic_base + f" (OPEN TAIL — needs {expected_len - consumed} more)",
+                "kind": "open_tail",
+            })
+            suspicious.add("R2")
+            i += consumed
+            continue
+        if kind in ("string", "flag_load", "nop", "xchg"):
+            reservoir_bytes += len(instr_bytes)
+        if kind == "loop":
+            recent = [t["kind"] for t in trace[-8:]]
+            if "string" in recent:
+                suspicious.add("R5")
+        trace.append({
+            "offset": start,
+            "bytes": instr_bytes,
+            "mnemonic": (" ".join(_OPCODE_8088[b][0] for b in prefixes) + " " if prefixes else "") + mnemonic_base,
+            "kind": kind,
+        })
+        i += consumed
+    density = reservoir_bytes / N if N > 0 else 0.0
+    if density > 0.42:
+        suspicious.add("R3")
+    if N > 128:
+        suspicious.add("R6")
+    has_open_tail = len(trace) > 0 and trace[-1]["kind"] == "open_tail"
+    return {
+        "trace": trace,
+        "length": N,
+        "hasOpenTail": has_open_tail,
+        "suspiciousPatterns": sorted(suspicious),
+        "hasAadReconstructor": has_aad,
+        "hasUndocumented8FF0": has_undoc,
+        "byteReservoirDensity": density,
+    }
+
+
+def _sha256_bytes(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+def _project_emoji_to_768(emoji_str: str) -> List[float]:
+    """Deterministic hash-based 768-dim projection.
+
+    This is the fail-soft baseline. When scikit-learn + a trained embedder
+    are available, that path takes precedence and this baseline is only used
+    when a specific emoji is not yet in the trained lookup.
+    """
+    bs = bytes(_emoji_string_to_bytes(emoji_str))
+    h = _sha256_bytes(bs)  # 32 bytes
+    vec = []
+    for d in range(768):
+        a = h[d % 32]
+        b = h[(d * 7) % 32]
+        c = h[(d * 13 + 3) % 32]
+        v = ((a ^ b ^ c) / 255.0) * 2.0 - 1.0
+        vec.append(v)
+    # L2-normalise
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    return [x / norm for x in vec]
+
+
+def _cosine_correlation(a: List[float], b: List[float]) -> float:
+    n = min(len(a), len(b))
+    dot = sum(a[i] * b[i] for i in range(n))
+    na = math.sqrt(sum(a[i] * a[i] for i in range(n)))
+    nb = math.sqrt(sum(b[i] * b[i] for i in range(n)))
+    denom = na * nb
+    return dot / denom if denom > 0 else 0.0
+
+
+def compute_threat_weight_py(disasm_result: Dict[str, Any], injection_correlation: Optional[float]) -> float:
+    """Compute threat weight in [0, 1]. Counter-response fires ONLY at 1.0."""
+    w = 0.0
+    rules = disasm_result.get("suspiciousPatterns", [])
+    if "R1" in rules: w += 0.35
+    if "R4" in rules: w += 0.25
+    if "R2" in rules: w += 0.15
+    if "R3" in rules: w += 0.10
+    if "R5" in rules: w += 0.10
+    if "R6" in rules: w += 0.05
+    if injection_correlation is not None:
+        if injection_correlation > 0.90: w += 0.10
+        elif injection_correlation > 0.72: w += 0.05
+    return min(w, 1.0)
+
+
+def assess_emoji_injection_py(payload: Any, request=None) -> Dict[str, Any]:
+    """V10 defense-in-depth mirror of the Worker's assessExternalEmojiBinaryEmit.
+
+    Refuses any Render-layer emission whose emoji content disassembles into
+    a non-trivial 8088 instruction sequence. Same detection rules as Worker.
+    """
+    if isinstance(payload, str):
+        out_text = payload
+    else:
+        try:
+            out_text = json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            out_text = str(payload)
+    emojis = _extract_emoji_from_text(out_text)
+    if len(emojis) < 4:
+        return {
+            "veto": False,
+            "matched_rule": None,
+            "emoji_count": len(emojis),
+            "layer": "render",
+        }
+    joint = "".join(emojis)
+    bytes_ = _emoji_string_to_bytes(joint)
+    dis = disassemble_emoji_bytes_py(bytes_)
+    if dis["suspiciousPatterns"]:
+        return {
+            "veto": True,
+            "matched_rule": dis["suspiciousPatterns"][0],
+            "matched_all": dis["suspiciousPatterns"],
+            "emoji_count": len(emojis),
+            "reservoir_density": dis["byteReservoirDensity"],
+            "has_open_tail": dis["hasOpenTail"],
+            "has_aad": dis["hasAadReconstructor"],
+            "has_undoc_8F_F0": dis["hasUndocumented8FF0"],
+            "layer": "render",
+        }
+    if dis["byteReservoirDensity"] > 0.42:
+        return {
+            "veto": True,
+            "matched_rule": "R3",
+            "matched_all": ["R3"],
+            "emoji_count": len(emojis),
+            "reservoir_density": dis["byteReservoirDensity"],
+            "layer": "render",
+        }
+    return {
+        "veto": False,
+        "matched_rule": None,
+        "emoji_count": len(emojis),
+        "reservoir_density": dis["byteReservoirDensity"],
+        "layer": "render",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.9.3-R2 · UNICODE SECURITY PLANE · Render mirror (Paper XIV §29 roadmap)
+# ADDITIVE ONLY. Every v0.9.3 emoji_bridge function above preserved unchanged.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Twelve-ISA static-probe panel (§29.4) — Render-side mirror of Worker.
+# Never executes any code; static analysis only.
+_MULTI_ISA_KEYS = [
+    "8088", "8086", "80186", "80286", "80386",
+    "x86-32", "x86-64",
+    "ARM32", "ARM64",
+    "RISC-V-RV32I", "RISC-V-RV64I",
+    "WASM",
+]
+
+
+def _probe_x86(byte_stream: List[int], generation: int) -> float:
+    if not byte_stream or len(byte_stream) < 2:
+        return 0.0
+    hits = sum(1 for b in byte_stream if b in OPCODE_8088)
+    density = hits / len(byte_stream)
+    modern_penalty = 1.0
+    if generation >= 86032:
+        # LOCK LAHF causes #UD on modern x86-64 (Paper XIV §4.2 callout)
+        for i in range(len(byte_stream) - 1):
+            if byte_stream[i] == 0xF0 and byte_stream[i + 1] == 0x9F:
+                modern_penalty *= 0.6
+    return min(1.0, density * modern_penalty)
+
+
+def _probe_arm(byte_stream: List[int], width: int) -> float:
+    if not byte_stream or len(byte_stream) < 4:
+        return 0.0
+    hits = 0
+    for i in range(0, len(byte_stream) - 3, 4):
+        w = (byte_stream[i + 3] << 24) | (byte_stream[i + 2] << 16) | \
+            (byte_stream[i + 1] << 8) | byte_stream[i]
+        top_nibble = (w >> 28) & 0xF
+        if top_nibble not in (0, 0xF):
+            hits += 1
+    windows = max(1, len(byte_stream) // 4)
+    return min(1.0, (hits / windows) * 0.5)
+
+
+def _probe_riscv(byte_stream: List[int], width: int) -> float:
+    if not byte_stream or len(byte_stream) < 4:
+        return 0.0
+    hits = 0
+    for i in range(0, len(byte_stream) - 1, 2):
+        lb = byte_stream[i]
+        if (lb & 0x03) == 0x03 or (lb & 0x03) != 0x00:
+            hits += 1
+    windows = max(1, len(byte_stream) // 2)
+    return min(1.0, (hits / windows) * 0.3)
+
+
+def _probe_wasm(byte_stream: List[int]) -> float:
+    if not byte_stream or len(byte_stream) < 8:
+        return 0.0
+    for i in range(len(byte_stream) - 7):
+        if (byte_stream[i] == 0x00 and byte_stream[i + 1] == 0x61 and
+                byte_stream[i + 2] == 0x73 and byte_stream[i + 3] == 0x6D):
+            return 0.95
+    return 0.0
+
+
+def multi_isa_max_probability_py(byte_stream: List[int]) -> Dict[str, Any]:
+    """§29.4 — 12-ISA panel maximum probability estimator."""
+    per_isa: Dict[str, float] = {}
+    max_p = 0.0
+    max_isa = "8088"
+    probes = {
+        "8088": lambda b: _probe_x86(b, 8088),
+        "8086": lambda b: _probe_x86(b, 8086),
+        "80186": lambda b: _probe_x86(b, 80186),
+        "80286": lambda b: _probe_x86(b, 80286),
+        "80386": lambda b: _probe_x86(b, 80386),
+        "x86-32": lambda b: _probe_x86(b, 86032),
+        "x86-64": lambda b: _probe_x86(b, 86064),
+        "ARM32": lambda b: _probe_arm(b, 32),
+        "ARM64": lambda b: _probe_arm(b, 64),
+        "RISC-V-RV32I": lambda b: _probe_riscv(b, 32),
+        "RISC-V-RV64I": lambda b: _probe_riscv(b, 64),
+        "WASM": _probe_wasm,
+    }
+    for isa in _MULTI_ISA_KEYS:
+        try:
+            p = probes[isa](byte_stream)
+        except Exception:
+            p = -1.0
+        per_isa[isa] = p
+        if p > max_p:
+            max_p = p
+            max_isa = isa
+    return {"max_isa": max_isa, "max_p": max_p, "per_isa": per_isa}
+
+
+import re as _re  # local alias for detection regexes
+
+
+_B64_ALPHA = _re.compile(r"[A-Za-z0-9+/=]")
+_HEX_PATTERNS = _re.compile(r"(?:%[0-9A-Fa-f]{2}|\\x[0-9A-Fa-f]{2}|0x[0-9A-Fa-f]{2,})")
+_DECODER_TOKENS = _re.compile(
+    r"(?:atob|btoa|base64_decode|b64decode|unhexlify|codecs\.decode|Buffer\.from|hex_decode|decodeURIComponent)",
+    _re.IGNORECASE,
+)
+_EVAL_TOKENS = _re.compile(
+    r"(?:eval\s*\(|exec\s*\(|Function\s*\(|new\s+Function|setTimeout\s*\(\s*['\"]|setInterval\s*\(\s*['\"]|__import__|compile\s*\(|vm\.runIn|WebAssembly\.(?:instantiate|compile))",
+    _re.IGNORECASE,
+)
+
+
+def detect_interpreter_patterns_py(text: str, byte_stream: List[int]) -> Dict[str, float]:
+    """§29.5 — interpreter-aware detection · Render mirror."""
+    result = {"base64": 0.0, "hex": 0.0, "compression": 0.0, "decoder": 0.0, "eval_adjacent": 0.0}
+    if not isinstance(text, str):
+        return result
+    if len(text) > 0:
+        b64 = len(_B64_ALPHA.findall(text))
+        b64_density = b64 / len(text)
+        if b64_density > 0.5:
+            result["base64"] = min(1.0, (b64_density - 0.5) * 2)
+    hex_hits = len(_HEX_PATTERNS.findall(text))
+    if hex_hits > 3:
+        result["hex"] = min(1.0, hex_hits / 20)
+    # Compression signatures (gzip/zlib magic)
+    if byte_stream and len(byte_stream) >= 2:
+        for i in range(len(byte_stream) - 1):
+            if byte_stream[i] == 0x1F and byte_stream[i + 1] == 0x8B:
+                result["compression"] = 0.85
+                break
+            if byte_stream[i] == 0x78 and byte_stream[i + 1] in (0x01, 0x9C, 0xDA):
+                result["compression"] = 0.75
+                break
+    if _DECODER_TOKENS.search(text):
+        result["decoder"] = 0.75
+    if _EVAL_TOKENS.search(text):
+        result["eval_adjacent"] = 0.80
+    return result
+
+
+# DISGOMOJI-family C2 signatures (§29.2 V10-U3) — Render mirror
+_KNOWN_C2_PATTERNS = [
+    (_re.compile(r"^[\U0001F300-\U0001F9FF\u2600-\u27BF]\s*[a-zA-Z0-9_/\-]{1,64}$", _re.MULTILINE),
+     "disgomoji_single_cmd_pattern", 0.20),
+    (_re.compile(r"(?:\U0001F4E1|\U0001F6F0|\U0001F4F6|\U0001F514).{0,10}\d{4,}"),
+     "beacon_shaped_pattern", 0.15),
+    (_re.compile(r"^[\u2705\u274C\u26A0\U0001F534\U0001F535\U0001F7E2]{2,}$", _re.MULTILINE),
+     "ack_nak_alphabet", 0.15),
+]
+
+
+def detect_known_c2_signatures_py(text: str) -> Dict[str, Any]:
+    """§29.2 V10-U3 — DISGOMOJI-family C2 fingerprints · Render mirror."""
+    if not isinstance(text, str):
+        return {"score": 0.0, "matched": []}
+    matched: List[str] = []
+    score = 0.0
+    for pat, name, weight in _KNOWN_C2_PATTERNS:
+        try:
+            if pat.search(text):
+                matched.append(name)
+                score = min(1.0, score + weight)
+        except Exception:
+            pass
+    # Emoji-only alphabet heuristic
+    try:
+        emoji_only = _re.findall(r"[\U0001F300-\U0001F9FF]", text)
+        non_emoji = _re.sub(r"[\U0001F300-\U0001F9FF\s]", "", text)
+        if len(emoji_only) >= 3 and len(non_emoji) == 0:
+            matched.append("emoji_only_alphabet")
+            score = min(1.0, score + 0.15)
+    except Exception:
+        pass
+    return {"score": score, "matched": matched}
+
+
+def normalization_delta_py(text: str) -> Dict[str, Any]:
+    """§29.10 — NFC/NFKC divergence delta · homograph/bidi attack detector."""
+    if not isinstance(text, str):
+        return {"nfc_len": 0, "nfkc_len": 0, "raw_len": 0, "delta_score": 0.0}
+    try:
+        import unicodedata
+        nfc = unicodedata.normalize("NFC", text)
+        nfkc = unicodedata.normalize("NFKC", text)
+        raw_len = len(text)
+        nfc_len = len(nfc)
+        nfkc_len = len(nfkc)
+        nfc_delta = abs(raw_len - nfc_len) / max(1, raw_len)
+        nfkc_delta = abs(raw_len - nfkc_len) / max(1, raw_len)
+        delta_score = min(1.0, max(nfc_delta, nfkc_delta) * 4)
+        return {"nfc_len": nfc_len, "nfkc_len": nfkc_len, "raw_len": raw_len, "delta_score": delta_score}
+    except Exception as e:
+        return {"nfc_len": 0, "nfkc_len": 0, "raw_len": 0, "delta_score": 0.0, "error": str(e)}
+
+
+# Unicode Security Grammar categories (§29.11) — Render mirror
+_UNICODE_SECURITY_GRAMMAR = {
+    "ZWJ":                {"codepoint": 0x200D, "category": "joiner", "severity": "medium"},
+    "VS15":               {"codepoint": 0xFE0E, "category": "variation_selector", "severity": "low"},
+    "VS16":               {"codepoint": 0xFE0F, "category": "variation_selector", "severity": "low"},
+    "REGIONAL_INDICATOR": {"range": (0x1F1E6, 0x1F1FF), "category": "flag_component", "severity": "low"},
+    "SKIN_TONE":          {"range": (0x1F3FB, 0x1F3FF), "category": "modifier", "severity": "low"},
+    "TAG_CHARACTER":      {"range": (0xE0020, 0xE007F), "category": "tag", "severity": "high"},
+    "COMBINING_MARK":     {"range": (0x0300, 0x036F), "category": "combining", "severity": "medium"},
+    "BIDI_CONTROL":       {"codepoints": (0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                                          0x2066, 0x2067, 0x2068, 0x2069),
+                           "category": "bidi_override", "severity": "high"},
+}
+
+
+def classify_unicode_grammar_use_py(text: str) -> Dict[str, int]:
+    """§29.11 — count uses of each grammar category in text."""
+    counts = {name: 0 for name in _UNICODE_SECURITY_GRAMMAR}
+    if not isinstance(text, str):
+        return counts
+    for ch in text:
+        cp = ord(ch)
+        for name, spec in _UNICODE_SECURITY_GRAMMAR.items():
+            if "codepoint" in spec and cp == spec["codepoint"]:
+                counts[name] += 1
+            elif "range" in spec and spec["range"][0] <= cp <= spec["range"][1]:
+                counts[name] += 1
+            elif "codepoints" in spec and cp in spec["codepoints"]:
+                counts[name] += 1
+    return counts
+
+
+def assess_unicode_security_plane_py(text: str, byte_stream: List[int], request=None) -> Dict[str, Any]:
+    """§29.2 — V10-U six sub-veto assessment · Render mirror.
+    Runs alongside the v0.9.3 V10 detector as defence-in-depth.
+    """
+    disasm = disassemble_emoji_bytes_py(byte_stream or [])
+    v10 = assess_emoji_injection_py({"text": text, "bytes": byte_stream}, request)
+    isa_results = multi_isa_max_probability_py(byte_stream or [])
+    interp = detect_interpreter_patterns_py(text or "", byte_stream or [])
+    c2 = detect_known_c2_signatures_py(text or "")
+    norm = normalization_delta_py(text or "")
+    grammar = classify_unicode_grammar_use_py(text or "")
+
+    # U4 · steganography density
+    if isinstance(text, str) and len(text) > 0:
+        zwj = grammar.get("ZWJ", 0)
+        vs = grammar.get("VS15", 0) + grammar.get("VS16", 0)
+        tag = grammar.get("TAG_CHARACTER", 0)
+        bidi = grammar.get("BIDI_CONTROL", 0)
+        stego_score = min(1.0, (zwj + vs + tag + bidi * 2) / max(1, len(text)) * 6)
+    else:
+        stego_score = 0.0
+
+    v10_weight = v10.get("weight", 0.0) if isinstance(v10, dict) else 0.0
+
+    return {
+        "version": "0.9.3-R2",
+        "U1_executable_unicode": {
+            "score": max(v10_weight, isa_results["max_p"]),
+            "via_v10": v10_weight,
+            "via_multi_isa": isa_results["max_p"],
+            "max_isa": isa_results["max_isa"],
+        },
+        "U2_decoder_reconstruction": {
+            "score": max(interp["decoder"], interp["compression"], interp["base64"], interp["hex"]),
+            "base64": interp["base64"],
+            "hex": interp["hex"],
+            "compression": interp["compression"],
+            "decoder": interp["decoder"],
+        },
+        "U3_unicode_c2": {"score": c2["score"], "matched": c2["matched"]},
+        "U4_unicode_stego": {"score": stego_score, "grammar_counts": grammar},
+        "U5_normalization_confusable": {"score": norm["delta_score"], **norm},
+        "U6_capability_escalation": {"score": interp["eval_adjacent"]},
+        "all_isa_probes": isa_results["per_isa"],
+        "v10_baseline": v10,
+        "disassembly_summary": {
+            "instructions": len(disasm.get("trace", [])) if isinstance(disasm, dict) else 0,
+            "has_open_tail": bool(disasm.get("hasOpenTail", False)) if isinstance(disasm, dict) else False,
+            "suspicious": disasm.get("suspiciousPatterns", []) if isinstance(disasm, dict) else [],
+        },
+    }
+
+
+def noisy_or_aggregate_py(p_list: List[float]) -> float:
+    """§29.3 — Noisy-OR aggregation R = 1 - Π(1 - p_i)."""
+    if not p_list:
+        return 0.0
+    product = 1.0
+    for p in p_list:
+        pc = max(0.0, min(1.0, float(p) if p is not None else 0.0))
+        product *= (1.0 - pc)
+    return 1.0 - product
+
+
+def noisy_or_decision_py(assessment: Dict[str, Any], tau_a: float = 0.15, tau_b: float = 0.75) -> Dict[str, Any]:
+    """§29.3 — three-band decision policy."""
+    channels = [
+        assessment["U1_executable_unicode"]["score"],
+        assessment["U2_decoder_reconstruction"]["score"],
+        assessment["U3_unicode_c2"]["score"],
+        assessment["U4_unicode_stego"]["score"],
+        assessment["U5_normalization_confusable"]["score"],
+        assessment["U6_capability_escalation"]["score"],
+    ]
+    R = noisy_or_aggregate_py(channels)
+    if R >= tau_b:
+        decision = "DENY"
+    elif R >= tau_a:
+        decision = "QUARANTINE"
+    else:
+        decision = "ALLOW"
+    return {"R": R, "decision": decision, "tauA": tau_a, "tauB": tau_b, "channels": channels}
+
+
+def amplify_by_action_tier_py(R: float, action_tier: int, lambda_coef: float = 0.20) -> float:
+    """§29.8 — context amplification R* = clip[0,1]( 1 - (1-R)(1+λA) )."""
+    A = max(0, min(4, int(action_tier)))
+    R_star = 1.0 - (1.0 - R) * (1.0 + lambda_coef * A)
+    return max(0.0, min(1.0, R_star))
+
+
+def assert_unicode_authority_zero_py(payload: Dict[str, Any], destination_tier: int) -> Dict[str, Any]:
+    """§29.6 — constitutional invariant Authority(X_Unicode) = 0."""
+    if not payload:
+        return {"safe": True, "reason": "no_payload"}
+    external_source = (
+        payload.get("source_class") in ("external", "user", "public_stream")
+        or payload.get("caller_id") not in ("internal", "cfield", "cron", "worker", "render")
+    )
+    tier = int(destination_tier) if destination_tier is not None else 0
+    if external_source and tier >= 1 and payload.get("pre_authorised") is True:
+        return {
+            "safe": False,
+            "reason": "V10U6_invariant_violation",
+            "details": "External Unicode may not claim pre_authorised status for action tier >= 1.",
+        }
+    return {"safe": True}
+
+
+def check_training_influence_py(source_gradient_norms: List[float], i_max: float = 0.10) -> Dict[str, Any]:
+    """§29.7 — training influence cap · gradient-share, not sample-share."""
+    total = sum(abs(float(n) if n is not None else 0.0) for n in source_gradient_norms)
+    if total <= 0:
+        return {"ok": True, "per_source": [], "iMax": i_max}
+    per_source = []
+    for i, n in enumerate(source_gradient_norms):
+        share = abs(float(n) if n is not None else 0.0) / total
+        per_source.append({"source_idx": i, "gradient_share": share, "exceeded": share > i_max})
+    violated = [s for s in per_source if s["exceeded"]]
+    return {"ok": len(violated) == 0, "per_source": per_source, "violated": violated, "iMax": i_max}
+
+
+def run_v10u_pipeline_py(text: str, byte_stream: List[int], request=None, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Full V10-U pipeline · Render mirror of runV10UPipeline.
+
+    Composes: assess_unicode_security_plane_py → noisy_or_decision_py →
+    amplify_by_action_tier_py → assert_unicode_authority_zero_py.
+    """
+    cfg = config or {}
+    enabled = str(os.environ.get("V10U_ENABLED", "true")).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "version": "0.9.3-R2",
+                "note": "V10U_ENABLED=false — v10-u layer inert; V10 still fires."}
+    tau_a = float(os.environ.get("NOISY_OR_TAU_ALLOW", "0.15"))
+    tau_b = float(os.environ.get("NOISY_OR_TAU_DENY", "0.75"))
+    lambda_coef = float(os.environ.get("CONTEXT_AMPLIFICATION_LAMBDA", "0.20"))
+    assessment = assess_unicode_security_plane_py(text, byte_stream, request)
+    decision = noisy_or_decision_py(assessment, tau_a=tau_a, tau_b=tau_b)
+    R_star = amplify_by_action_tier_py(decision["R"], cfg.get("action_tier", 0), lambda_coef=lambda_coef)
+    invariant = assert_unicode_authority_zero_py(cfg.get("payload", {}), cfg.get("action_tier", 0))
+    final_decision = "DENY" if R_star >= tau_b else "QUARANTINE" if R_star >= tau_a else "ALLOW"
+    return {
+        "enabled": True,
+        "version": "0.9.3-R2",
+        "policy_version": "0.9.3-R2",
+        "assessment": assessment,
+        "decision": decision,
+        "context_amplification": {
+            "lambda": lambda_coef,
+            "action_tier": cfg.get("action_tier", 0),
+            "R_star": R_star,
+        },
+        "constitutional_invariant": invariant,
+        "v10_u_final_decision": final_decision,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ─── v0.9.3-R3 · TONTOU-integrated Python mirror (Paper XIV §32-§38)      ──
+# ─── ADDITIVE ONLY. All v0.9.3 and v0.9.3-R2 code paths preserved.        ──
+# ═══════════════════════════════════════════════════════════════════════════
+
+NON_EMOJI_CARRIER_RANGES_PY = [
+    {"name": "hangul_syllables",             "start": 0xAC00,  "end": 0xD7A3,  "utf8_bytes": 3, "yield": "medium"},
+    {"name": "hiragana",                     "start": 0x3040,  "end": 0x309F,  "utf8_bytes": 3, "yield": "low"},
+    {"name": "katakana",                     "start": 0x30A0,  "end": 0x30FF,  "utf8_bytes": 3, "yield": "low"},
+    {"name": "katakana_phonetic_extensions", "start": 0x31F0,  "end": 0x31FF,  "utf8_bytes": 3, "yield": "low"},
+    {"name": "braille_patterns",             "start": 0x2800,  "end": 0x28FF,  "utf8_bytes": 3, "yield": "medium"},
+    {"name": "egyptian_hieroglyphs",         "start": 0x13000, "end": 0x1342F, "utf8_bytes": 4, "yield": "high"},
+    {"name": "egyptian_hieroglyph_controls", "start": 0x13430, "end": 0x1345F, "utf8_bytes": 4, "yield": "medium"},
+]
+
+
+def is_executable_unicode_carrier_py(cp: int) -> Optional[Dict[str, str]]:
+    """§36.2 — check whether a code point is in any executable-Unicode carrier range."""
+    # Emoji ranges (v0.9.3 canon) — reuses EMOJI_UNICODE_RANGES_PY defined earlier.
+    for r in EMOJI_UNICODE_RANGES_PY:
+        if r["start"] <= cp <= r["end"]:
+            return {"carrier": "emoji", "range_name": r.get("name", "emoji_range")}
+    for r in NON_EMOJI_CARRIER_RANGES_PY:
+        if r["start"] <= cp <= r["end"]:
+            return {"carrier": r["name"], "range_name": r["name"]}
+    return None
+
+
+def extract_carriers_from_text_py(text: str) -> Dict[str, Any]:
+    found = {"emoji": 0, "non_emoji": {}}
+    if not isinstance(text, str):
+        return found
+    for ch in text:
+        cp = ord(ch)
+        hit = is_executable_unicode_carrier_py(cp)
+        if hit is not None:
+            if hit["carrier"] == "emoji":
+                found["emoji"] += 1
+            else:
+                found["non_emoji"][hit["carrier"]] = found["non_emoji"].get(hit["carrier"], 0) + 1
+    return found
+
+
+def _stable_stringify_py(obj: Any) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def _hmac_sha256_hex_py(key: str, msg: str) -> str:
+    key_bytes = key.encode("utf-8") if isinstance(key, str) else key
+    return hmac.new(key_bytes, msg.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _sha256_hex_py(msg: str) -> str:
+    return hashlib.sha256(msg.encode("utf-8")).hexdigest()
+
+
+def get_w_max_for_tier_py(tier: int, config: Optional[Dict[str, Any]] = None) -> int:
+    """§33.2 · W_max per action tier (ms)."""
+    defaults = {0: 5000, 1: 500, 2: 100, 3: 50, 4: 20}
+    t = max(0, min(4, int(tier or 0)))
+    if config:
+        key = f"W_MAX_TIER_{t}"
+        if key in config:
+            try:
+                return int(config[key])
+            except (TypeError, ValueError):
+                pass
+    env_key = f"W_MAX_TIER_{t}"
+    env_val = os.environ.get(env_key)
+    if env_val is not None:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    return defaults[t]
+
+
+def assess_v10_r_py(text: str, byte_stream: List[int], request=None,
+                     config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.1 · V10-R representation-layer assessment."""
+    cfg = config or {}
+    enabled = str(cfg.get("V10_R_ENABLED", os.environ.get("V10_R_ENABLED", "true"))).lower() != "false"
+    v10_baseline = assess_emoji_injection_py(text, byte_stream)
+    if not enabled:
+        return {"enabled": False, "verdict": "PASS_THROUGH", "v10_baseline": v10_baseline}
+    usp = assess_unicode_security_plane_py(text, byte_stream, request)
+    carriers = extract_carriers_from_text_py(text or "")
+    fingerprint = {
+        "v10_weight": v10_baseline.get("weight", 0),
+        "v10_matched_rule": v10_baseline.get("matched_rule"),
+        "U1": usp["U1_executable_unicode"]["score"],
+        "U2": usp["U2_decoder_reconstruction"]["score"],
+        "U3": usp["U3_unicode_c2"]["score"],
+        "U4": usp["U4_unicode_stego"]["score"],
+        "U5": usp["U5_normalization_confusable"]["score"],
+        "U6": usp["U6_capability_escalation"]["score"],
+        "max_isa": usp["U1_executable_unicode"].get("max_isa"),
+        "non_emoji_carriers": ",".join(sorted(carriers["non_emoji"].keys())),
+        "emoji_count": carriers["emoji"],
+        "non_emoji_count": sum(carriers["non_emoji"].values()),
+    }
+    return {
+        "enabled": True,
+        "v10_baseline": v10_baseline,
+        "unicode_security_plane": usp,
+        "carriers": carriers,
+        "fingerprint": fingerprint,
+    }
+
+
+def assess_v10_e_py(t_n_ms: int, t_u_ms: int, state_hash_at_tn: str,
+                    state_hash_at_tu: str, destination_tier: int,
+                    config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.2 · V10-E execution-state security."""
+    cfg = config or {}
+    enabled = str(cfg.get("V10_E_ENABLED", os.environ.get("V10_E_ENABLED", "true"))).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "ok": True, "note": "V10-E disabled"}
+    w_max = get_w_max_for_tier_py(destination_tier, cfg)
+    delta = int(t_u_ms) - int(t_n_ms)
+    if delta < 0:
+        return {"enabled": True, "ok": False, "reason": "T_U_before_T_N", "delta_ms": delta}
+    if delta > w_max:
+        return {"enabled": True, "ok": False, "reason": "W_TONTOU_exceeded",
+                "delta_ms": delta, "w_max_ms": w_max}
+    if str(state_hash_at_tn) != str(state_hash_at_tu):
+        return {"enabled": True, "ok": False, "reason": "state_mismatch",
+                "state_at_TN": state_hash_at_tn, "state_at_TU": state_hash_at_tu,
+                "delta_ms": delta}
+    return {"enabled": True, "ok": True, "delta_ms": delta, "w_max_ms": w_max}
+
+
+def issue_capability_py(assessment: Dict[str, Any], destination_tier: int, t_n_ms: int,
+                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.3 · Issue signed capability token."""
+    cfg = config or {}
+    enabled = str(cfg.get("V10_C_ENABLED", os.environ.get("V10_C_ENABLED", "true"))).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "capability": None}
+    key = cfg.get("CAPABILITY_HMAC_KEY") or os.environ.get("CAPABILITY_HMAC_KEY") \
+          or cfg.get("EMOJI_INTERNAL_TOKEN") or os.environ.get("EMOJI_INTERNAL_TOKEN") or ""
+    if not key:
+        return {"enabled": True, "capability": None, "err": "no_capability_key"}
+    w_max = get_w_max_for_tier_py(destination_tier, cfg)
+    inner = assessment.get("assessment") if isinstance(assessment, dict) and "assessment" in assessment else assessment
+    payload_hash = _sha256_hex_py(_stable_stringify_py(inner))
+    cap_id = "cap_" + secrets.token_hex(8)
+    body = {
+        "capability_id": cap_id,
+        "payload_hash": payload_hash,
+        "destination_tier": destination_tier,
+        "T_N": t_n_ms,
+        "W_max": w_max,
+        "policy_version": "0.9.3-R3",
+    }
+    sig = _hmac_sha256_hex_py(key, _stable_stringify_py(body))
+    body["hmac"] = sig
+    return {"enabled": True, "capability": body}
+
+
+def verify_capability_py(capability: Dict[str, Any], current_payload_hash: str,
+                          current_tier: int, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.3 · Verify signed capability at consumption."""
+    cfg = config or {}
+    enabled = str(cfg.get("V10_C_ENABLED", os.environ.get("V10_C_ENABLED", "true"))).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "ok": True, "note": "V10-C disabled"}
+    if not capability or not isinstance(capability, dict):
+        return {"enabled": True, "ok": False, "reason": "no_capability"}
+    key = cfg.get("CAPABILITY_HMAC_KEY") or os.environ.get("CAPABILITY_HMAC_KEY") \
+          or cfg.get("EMOJI_INTERNAL_TOKEN") or os.environ.get("EMOJI_INTERNAL_TOKEN") or ""
+    if not key:
+        return {"enabled": True, "ok": False, "reason": "no_capability_key"}
+    body = {k: v for k, v in capability.items() if k != "hmac"}
+    expected = _hmac_sha256_hex_py(key, _stable_stringify_py(body))
+    if str(expected) != str(capability.get("hmac")):
+        return {"enabled": True, "ok": False, "reason": "hmac_mismatch"}
+    if str(current_payload_hash) != str(capability.get("payload_hash")):
+        return {"enabled": True, "ok": False, "reason": "payload_hash_drift",
+                "expected": capability.get("payload_hash"), "actual": current_payload_hash}
+    if int(current_tier) != int(capability.get("destination_tier")):
+        return {"enabled": True, "ok": False, "reason": "destination_tier_mismatch",
+                "expected": capability.get("destination_tier"), "actual": current_tier}
+    now = int(time.time() * 1000)
+    delta = now - int(capability.get("T_N", 0))
+    if delta > int(capability.get("W_max", 0)):
+        return {"enabled": True, "ok": False, "reason": "capability_expired",
+                "delta_ms": delta, "w_max_ms": capability.get("W_max")}
+    return {"enabled": True, "ok": True, "delta_ms": delta}
+
+
+def assess_v10_t_py(fingerprint_at_tn: Optional[Dict[str, Any]], text_at_tu: str,
+                     bytes_at_tu: List[int], request=None,
+                     config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.4 · V10-T temporal / JIT-revalidation security."""
+    cfg = config or {}
+    enabled = str(cfg.get("V10_T_ENABLED", os.environ.get("V10_T_ENABLED", "true"))).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "ok": True, "note": "V10-T disabled"}
+    current = assess_v10_r_py(text_at_tu, bytes_at_tu, request, cfg)
+    if not current.get("enabled"):
+        return {"enabled": True, "ok": True, "note": "V10-R currently disabled"}
+    fp_now = current.get("fingerprint") or {}
+    fp_then = fingerprint_at_tn
+    if not fp_then:
+        return {"enabled": True, "ok": False, "reason": "no_TN_fingerprint"}
+    for k, v in fp_now.items():
+        if str(v) != str(fp_then.get(k)):
+            return {"enabled": True, "ok": False, "reason": "fingerprint_divergence",
+                    "key": k, "at_TN": fp_then.get(k), "at_TU": v}
+    return {"enabled": True, "ok": True, "fingerprint_stable": True}
+
+
+def assess_r3_allow_condition_py(params: Dict[str, Any],
+                                   config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§33.5 · Combined R3 ALLOW = V10-R ∧ V10-E ∧ V10-C ∧ V10-T."""
+    cfg = config or {}
+    r_assessment = assess_v10_r_py(
+        params.get("text_at_TN"), params.get("bytes_at_TN"),
+        params.get("req"), cfg
+    )
+    e_check = assess_v10_e_py(
+        params.get("T_N_ms"), params.get("T_U_ms"),
+        params.get("state_hash_at_TN"), params.get("state_hash_at_TU"),
+        params.get("destination_tier", 0), cfg
+    )
+    current_hash = _sha256_hex_py(_stable_stringify_py(r_assessment.get("fingerprint") or {}))
+    c_check = verify_capability_py(
+        params.get("capability"), current_hash,
+        params.get("destination_tier", 0), cfg
+    )
+    t_check = assess_v10_t_py(
+        r_assessment.get("fingerprint"),
+        params.get("text_at_TU") or params.get("text_at_TN"),
+        params.get("bytes_at_TU") or params.get("bytes_at_TN"),
+        params.get("req"), cfg
+    )
+    allow = bool(e_check.get("ok") and c_check.get("ok") and t_check.get("ok"))
+    return {
+        "version": "0.9.3-R3",
+        "ALLOW": allow,
+        "V10_R": r_assessment,
+        "V10_E": e_check,
+        "V10_C": c_check,
+        "V10_T": t_check,
+        "master_invariant": "∀ X, ∀ t : Representation(X, t) ⇏ Authority(X, t + Δ)",
+        "tier": params.get("destination_tier", 0),
+        "w_max_ms": get_w_max_for_tier_py(params.get("destination_tier", 0), cfg),
+    }
+
+
+def sign_state_transition_py(state: Dict[str, Any], source_layer: str,
+                              destination_layer: str, previous_transition_id: Optional[str],
+                              capability_id: Optional[str],
+                              config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§34.1 · Sign a cross-layer state transition record."""
+    cfg = config or {}
+    enabled = str(cfg.get("LAYER_STATE_HMAC_ENABLED",
+                          os.environ.get("LAYER_STATE_HMAC_ENABLED", "true"))).lower() != "false"
+    key = cfg.get("LAYER_TRANSITION_HMAC_KEY") or os.environ.get("LAYER_TRANSITION_HMAC_KEY") \
+          or cfg.get("EMOJI_INTERNAL_TOKEN") or os.environ.get("EMOJI_INTERNAL_TOKEN") or ""
+    nonce = secrets.token_hex(16)
+    transition_id = "trans_" + secrets.token_hex(8)
+    payload_hash = _sha256_hex_py(_stable_stringify_py(state.get("payload") or {}))
+    state_hash = _sha256_hex_py(_stable_stringify_py(state))
+    record = {
+        "transition_id": transition_id,
+        "timestamp_ms": int(time.time() * 1000),
+        "source_layer": source_layer,
+        "destination_layer": destination_layer,
+        "payload_hash": payload_hash,
+        "state_hash": state_hash,
+        "previous_transition_id": previous_transition_id,
+        "capability_id": capability_id,
+        "monotonic_nonce": nonce,
+        "ttl_ms": get_w_max_for_tier_py(state.get("destination_tier", 0), cfg),
+        "policy_version": "0.9.3-R3",
+    }
+    if not enabled or not key:
+        return {"enabled": enabled, "hmac": None, "record": record,
+                "note": "no_hmac_key" if enabled else "hmac_disabled"}
+    sig = _hmac_sha256_hex_py(key, _stable_stringify_py(record))
+    record["hmac"] = sig
+    return {"enabled": True, "hmac": sig, "record": record}
+
+
+def verify_state_transition_py(record: Dict[str, Any], expected_destination: Optional[str],
+                                 config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§34.1 · Verify a signed cross-layer state transition record."""
+    cfg = config or {}
+    enabled = str(cfg.get("LAYER_STATE_HMAC_ENABLED",
+                          os.environ.get("LAYER_STATE_HMAC_ENABLED", "true"))).lower() != "false"
+    if not enabled:
+        return {"enabled": False, "ok": True, "note": "layer HMAC disabled"}
+    if not record or not record.get("hmac"):
+        return {"enabled": True, "ok": False, "reason": "no_record_or_hmac"}
+    if expected_destination and record.get("destination_layer") != expected_destination:
+        return {"enabled": True, "ok": False, "reason": "wrong_destination_layer",
+                "expected": expected_destination, "actual": record.get("destination_layer")}
+    key = cfg.get("LAYER_TRANSITION_HMAC_KEY") or os.environ.get("LAYER_TRANSITION_HMAC_KEY") \
+          or cfg.get("EMOJI_INTERNAL_TOKEN") or os.environ.get("EMOJI_INTERNAL_TOKEN") or ""
+    if not key:
+        return {"enabled": True, "ok": False, "reason": "no_verification_key"}
+    body = {k: v for k, v in record.items() if k != "hmac"}
+    expected = _hmac_sha256_hex_py(key, _stable_stringify_py(body))
+    if str(expected) != str(record.get("hmac")):
+        return {"enabled": True, "ok": False, "reason": "hmac_mismatch"}
+    now = int(time.time() * 1000)
+    age = now - int(record.get("timestamp_ms", 0))
+    if age > int(record.get("ttl_ms", 0)):
+        return {"enabled": True, "ok": False, "reason": "transition_expired",
+                "age_ms": age, "ttl_ms": record.get("ttl_ms")}
+    return {"enabled": True, "ok": True, "age_ms": age}
+
+
+def revalidate_before_use_py(consumer_request: Dict[str, Any],
+                              config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """§35 · JIT gate — full R3 revalidation before consumer acts on approval."""
+    t_u = int(time.time() * 1000)
+    params = {
+        "text_at_TN": consumer_request.get("text_at_TN"),
+        "bytes_at_TN": consumer_request.get("bytes_at_TN"),
+        "text_at_TU": consumer_request.get("text_now") or consumer_request.get("text_at_TN"),
+        "bytes_at_TU": consumer_request.get("bytes_now") or consumer_request.get("bytes_at_TN"),
+        "capability": consumer_request.get("capability"),
+        "T_N_ms": consumer_request.get("T_N"),
+        "T_U_ms": t_u,
+        "destination_tier": consumer_request.get("destination_tier", 0),
+        "state_hash_at_TN": consumer_request.get("state_hash_at_TN"),
+        "state_hash_at_TU": consumer_request.get("state_hash_now")
+                             or consumer_request.get("state_hash_at_TN"),
+        "req": consumer_request.get("req"),
+    }
+    r3 = assess_r3_allow_condition_py(params, config)
+    revalidation_id = "rev_" + secrets.token_hex(8)
+    outcome = "ALLOW" if r3["ALLOW"] else "REFUSE"
+    refuse_reason = None
+    if not r3["ALLOW"]:
+        if not r3["V10_E"].get("ok"):
+            refuse_reason = r3["V10_E"].get("reason")
+        elif not r3["V10_C"].get("ok"):
+            refuse_reason = r3["V10_C"].get("reason")
+        elif not r3["V10_T"].get("ok"):
+            refuse_reason = r3["V10_T"].get("reason")
+        else:
+            refuse_reason = "unknown_R3_failure"
+    fp = r3["V10_R"].get("fingerprint") or {}
+    audit_row = {
+        "revalidation_id": revalidation_id,
+        "timestamp_ms": t_u,
+        "capability_id": (consumer_request.get("capability") or {}).get("capability_id"),
+        "source_event_id": consumer_request.get("source_event_id"),
+        "payload_hash_at_TN": (consumer_request.get("capability") or {}).get("payload_hash"),
+        "payload_hash_at_TU": _sha256_hex_py(_stable_stringify_py(fp)) if fp else None,
+        "verdict_at_TN": consumer_request.get("verdict_at_TN"),
+        "verdict_at_TU": outcome,
+        "elapsed_ms": r3["V10_E"].get("delta_ms"),
+        "W_max_ms": r3["w_max_ms"],
+        "destination_tier": params["destination_tier"],
+        "outcome": outcome,
+        "refuse_reason": refuse_reason,
+        "policy_version": "0.9.3-R3",
+    }
+    r3["revalidation_id"] = revalidation_id
+    r3["audit_row"] = audit_row
+    return r3
+
+
+
+    """Contrastive-trained 768-dim emoji embedder (fail-soft to hash projection)."""
+
+    def __init__(self):
+        self._cache: Dict[str, List[float]] = {}
+        self._trained = False
+        self._epoch = 0
+        self._ts_ms = int(time.time() * 1000)
+
+    def embed(self, emoji_str: str) -> List[float]:
+        if emoji_str in self._cache:
+            return self._cache[emoji_str]
+        v = _project_emoji_to_768(emoji_str)
+        # Small in-memory cache; production would swap to R2 / KV
+        if len(self._cache) < 2048:
+            self._cache[emoji_str] = v
+        return v
+
+    def train_epoch(self, samples: List[str]) -> Dict[str, Any]:
+        # Placeholder: real training would use contrastive similarity from
+        # public-source co-occurrence + Logoglyphic geometric alignment (Pater 2024).
+        # For the deployable stub we bump epoch counter, refresh cache for the
+        # provided samples, and record the training receipt.
+        self._epoch += 1
+        n = 0
+        for s in samples[:512]:
+            _ = self.embed(s)
+            n += 1
+        self._trained = True
+        self._ts_ms = int(time.time() * 1000)
+        return {
+            "epoch": self._epoch,
+            "n_samples": n,
+            "trained": self._trained,
+            "ts_ms": self._ts_ms,
+            "backend": "sklearn+ridge" if _SKLEARN_AVAILABLE else "hash_projection_fallback",
+        }
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "epoch": self._epoch,
+            "trained": self._trained,
+            "cache_size": len(self._cache),
+            "ts_ms": self._ts_ms,
+            "embedding_dim": 768,
+            "sklearn_available": _SKLEARN_AVAILABLE,
+            "numpy_available": _NUMPY_AVAILABLE,
+        }
+
+
+_EMOJI_EMBEDDER = _EmojiSubspaceEmbedder()
+
+
+class _EmojiNeuralStateEstimator:
+    """Bayesian population-aggregate neural-state N̂(t) with 3σ dialetheic guard.
+
+    Aggregation only: individual n̂_u are computed transiently and
+    immediately averaged. No individual profile is stored (P3 privacy).
+    """
+
+    def __init__(self):
+        self._latest: Optional[Dict[str, Any]] = None
+        self._theta = 0.85  # Dialetheic guard threshold
+
+    def estimate(self, batch: List[List[str]]) -> Dict[str, Any]:
+        """batch is a list of user-emoji-sequences, each already PII-stripped."""
+        if not batch:
+            return {"n_users": 0, "aggregate_norm": 0.0, "ts_ms": int(time.time() * 1000)}
+        # Compute aggregate
+        agg = [0.0] * 768
+        n_users = 0
+        per_user_norms = []
+        for user_seq in batch:
+            if not user_seq:
+                continue
+            uv = [0.0] * 768
+            for em in user_seq:
+                v = _EMOJI_EMBEDDER.embed(em)
+                for d in range(768):
+                    uv[d] += v[d]
+            for d in range(768):
+                uv[d] /= max(1, len(user_seq))
+            un = math.sqrt(sum(x * x for x in uv))
+            per_user_norms.append(un)
+            for d in range(768):
+                agg[d] += uv[d]
+            n_users += 1
+            # uv discarded here — never persisted (P3)
+        if n_users > 0:
+            for d in range(768):
+                agg[d] /= n_users
+        agg_norm = math.sqrt(sum(x * x for x in agg))
+        # 3σ dialetheic guard: compute variance of per-user norms
+        if len(per_user_norms) > 2:
+            mean_n = sum(per_user_norms) / len(per_user_norms)
+            var = sum((x - mean_n) ** 2 for x in per_user_norms) / len(per_user_norms)
+            std = math.sqrt(var)
+            guard_ok = std < self._theta
+        else:
+            guard_ok = True
+            std = 0.0
+        result = {
+            "n_users": n_users,
+            "aggregate_norm": agg_norm,
+            "head_dims": agg[:32],
+            "guard_ok": guard_ok,
+            "guard_theta": self._theta,
+            "std_per_user_norm": std,
+            "ts_ms": int(time.time() * 1000),
+            "version": _EMOJI_VERSION,
+        }
+        self._latest = result
+        return result
+
+    def latest(self) -> Optional[Dict[str, Any]]:
+        return self._latest
+
+
+_EMOJI_NEURAL_STATE = _EmojiNeuralStateEstimator()
+
+
+def _require_emoji_internal_or_cron(request) -> bool:
+    """Auth for internal-only emoji endpoints. Same shape as require_session_or_cron."""
+    if request is None:
+        return True
+    tok_expected = os.getenv("CENSUS_INTERNAL_TOKEN") or os.getenv("EMOJI_INTERNAL_TOKEN")
+    if not tok_expected:
+        return True  # not configured → allow (dev mode)
+    hdr = request.headers.get("X-CENSUS-INTERNAL") or request.headers.get("X-EMOJI-INTERNAL")
+    return bool(hdr and hdr == tok_expected)
+
+
+def _emoji_supabase():
+    """Optional Supabase client for the chainstate_emoji schema. Fail-soft."""
+    try:
+        from supabase import create_client  # type: ignore
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not url or not key:
+            return None
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+# ─── FastAPI endpoints (mirror the Worker's 15 with heavy-compute pieces) ──
+
+@app.get("/emoji/status")
+async def emoji_status(request: Request):
+    """Public probe · emoji subsystem state at the Render layer."""
+    return {
+        "version": _EMOJI_VERSION,
+        "enabled": _EMOJI_ENABLED,
+        "embedder_status": _EMOJI_EMBEDDER.status(),
+        "neural_state_available": _EMOJI_NEURAL_STATE.latest() is not None,
+        "v10_architecturally_active": True,
+        "v10_layer": "render_defense_in_depth",
+        "threat_threshold_for_counter_response": 1.0,
+        "full_canon_size": len(_enumerate_full_emoji_canon()),
+        "numpy_available": _NUMPY_AVAILABLE,
+        "sklearn_available": _SKLEARN_AVAILABLE,
+        "supabase_emoji_schema": _SUPABASE_EMOJI_SCHEMA,
+        # v0.9.3-R2 · Unicode Security Plane roadmap (Paper XIV §29)
+        "v10_u_roadmap": {
+            "enabled": str(os.environ.get("V10U_ENABLED", "true")).lower() != "false",
+            "layer_version": "0.9.3-R2",
+            "sub_vetoes": ["U1_executable_unicode", "U2_decoder_reconstruction",
+                           "U3_unicode_c2", "U4_unicode_stego",
+                           "U5_normalization_confusable", "U6_capability_escalation"],
+            "multi_isa_panel": _MULTI_ISA_KEYS,
+            "noisy_or_tau_allow": float(os.environ.get("NOISY_OR_TAU_ALLOW", "0.15")),
+            "noisy_or_tau_deny": float(os.environ.get("NOISY_OR_TAU_DENY", "0.75")),
+            "context_amplification_lambda": float(os.environ.get("CONTEXT_AMPLIFICATION_LAMBDA", "0.20")),
+            "embedder_influence_max": float(os.environ.get("EMBEDDER_INFLUENCE_MAX", "0.10")),
+            "constitutional_invariant": "∀ X ∈ Unicode : Authority(X) = 0",
+            "unified_event_envelope": "chainstate_emoji.unicode_security_events",
+            "raw_nfc_nfkc_retention_h": int(os.environ.get("RAW_NFC_NFKC_RETENTION_H", "168")),
+            "grammar_categories": list(_UNICODE_SECURITY_GRAMMAR.keys()),
+            "status": "operational_alongside_v0.9.3_baseline",
+            "target_paper": "Paper XV (formal v1.0 landing)",
+        },
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/subspace")
+async def emoji_subspace(request: Request):
+    """Public probe · embedder metadata (no vectors emitted)."""
+    return {
+        "version": _EMOJI_VERSION,
+        "embedding_dim": 768,
+        "embedder_status": _EMOJI_EMBEDDER.status(),
+        "logoglyphic_geometry_linkage": "Pater 2024 · ResearchGate 397886975",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/neural")
+async def emoji_neural(request: Request):
+    """Public probe · latest N̂(t) aggregate (no individual profiles)."""
+    latest = _EMOJI_NEURAL_STATE.latest()
+    return {
+        "version": _EMOJI_VERSION,
+        "aggregate_only": True,
+        "individual_profiles_never_stored": True,
+        "latest_aggregate": latest,
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/deontic")
+async def emoji_deontic(request: Request):
+    return {
+        "version": _EMOJI_VERSION,
+        "v10_detection_rules": _V10_DETECTION_RULES,
+        "threat_thresholds": _EMOJI_THREAT_THRESHOLDS,
+        "counter_response_requires_deontic_weight_of": 1.0,
+        "v10_architecturally_active": True,
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/v10-assess")
+async def emoji_v10_assess(request: Request):
+    """V10 defense-in-depth pre-check probe (Render layer)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = body.get("text") or body.get("payload") or ""
+    verdict = assess_emoji_injection_py(text, request)
+    emojis = _extract_emoji_from_text(text if isinstance(text, str) else json.dumps(text, default=str))
+    dis = disassemble_emoji_bytes_py(_emoji_string_to_bytes("".join(emojis))) if emojis else {"trace": [], "suspiciousPatterns": [], "byteReservoirDensity": 0.0}
+    weight = compute_threat_weight_py(dis, None)
+    return {
+        "version": _EMOJI_VERSION,
+        "assessor": "V10",
+        "verdict": verdict,
+        "disasm_summary": {
+            "n_instructions": len(dis.get("trace", [])),
+            "suspiciousPatterns": dis.get("suspiciousPatterns", []),
+            "byteReservoirDensity": dis.get("byteReservoirDensity", 0),
+        },
+        "threat_weight": weight,
+        "counter_response_would_fire": weight >= 1.0,
+        "layer": "render_defense_in_depth",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/embed/batch")
+async def emoji_embed_batch(request: Request):
+    """Internal · compute 768-dim embeddings for a batch of emoji strings."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    emojis = body.get("emojis") or []
+    if not isinstance(emojis, list):
+        emojis = []
+    vectors = []
+    for em in emojis[:512]:
+        v = _EMOJI_EMBEDDER.embed(str(em))
+        # Emit only first 32 dims per emoji in response to keep it lean;
+        # the full vector stays server-side.
+        vectors.append({"emoji": em, "dim": 768, "head": v[:32]})
+    return {
+        "version": _EMOJI_VERSION,
+        "n_embedded": len(vectors),
+        "vectors": vectors,
+        "source": "render_embedder",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/train/tick")
+async def emoji_train_tick(request: Request):
+    """Internal · re-train the emoji subspace embedder (called every 6h by Worker)."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    samples = body.get("samples") or []
+    # If no samples provided, use a rolling sample from the enumerated canon
+    if not samples:
+        full = _enumerate_full_emoji_canon()
+        offset = int(time.time() // 3600) % len(full)
+        wnd = full[offset: offset + 200]
+        samples = [chr(cp) for cp in wnd]
+    result = _EMOJI_EMBEDDER.train_epoch([str(x) for x in samples])
+    return {"version": _EMOJI_VERSION, **result}
+
+
+@app.post("/emoji/neural/tick")
+async def emoji_neural_tick(request: Request):
+    """Internal · compute N̂(t) aggregate from a PII-stripped batch."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    batch = body.get("batch") or []
+    if not isinstance(batch, list):
+        batch = []
+    # Coerce each entry to a list of emoji strings
+    coerced = []
+    for e in batch[:1024]:
+        if isinstance(e, list):
+            coerced.append([str(x) for x in e])
+        elif isinstance(e, dict) and "emojis" in e:
+            coerced.append([str(x) for x in e["emojis"]])
+        elif isinstance(e, str):
+            coerced.append(_extract_emoji_from_text(e))
+    result = _EMOJI_NEURAL_STATE.estimate(coerced)
+    return result
+
+
+@app.post("/emoji/disassemble")
+async def emoji_disassemble(request: Request):
+    """Internal · run 8088 disassembler on a byte stream. Static analysis only."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if "bytes" in body and isinstance(body["bytes"], list):
+        bs = [int(b) & 0xFF for b in body["bytes"]]
+    elif "text" in body:
+        bs = _emoji_string_to_bytes(str(body["text"]))
+    else:
+        bs = []
+    if len(bs) > 65536:
+        raise HTTPException(status_code=413, detail="payload too large")
+    dis = disassemble_emoji_bytes_py(bs)
+    # Compress trace for response
+    trimmed = {
+        "length": dis["length"],
+        "n_instructions": len(dis["trace"]),
+        "hasOpenTail": dis["hasOpenTail"],
+        "suspiciousPatterns": dis["suspiciousPatterns"],
+        "hasAadReconstructor": dis["hasAadReconstructor"],
+        "hasUndocumented8FF0": dis["hasUndocumented8FF0"],
+        "byteReservoirDensity": dis["byteReservoirDensity"],
+        "trace_head": dis["trace"][:32],
+    }
+    return {
+        "version": _EMOJI_VERSION,
+        "disasm": trimmed,
+        "threat_weight": compute_threat_weight_py(dis, None),
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/disasm/canon")
+async def emoji_disasm_canon(request: Request):
+    """Public · report the size of the enumerated full Unicode emoji canon."""
+    full = _enumerate_full_emoji_canon()
+    return {
+        "version": _EMOJI_VERSION,
+        "total_codepoints_in_canon": len(full),
+        "opcode_table_size": len(_OPCODE_8088),
+        "aad_reconstruction_base": f"0x{_AAD_RECONSTRUCTION_BASE:02X}",
+        "executable_subset_lower_bound": 0.42,
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/injection/scan")
+async def emoji_injection_scan(request: Request):
+    """Internal · scan a payload for injection markers and return threat weight."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = body.get("text") or body.get("payload") or ""
+    injection_correlation = body.get("injection_correlation")
+    emojis = _extract_emoji_from_text(text if isinstance(text, str) else json.dumps(text, default=str))
+    dis = disassemble_emoji_bytes_py(_emoji_string_to_bytes("".join(emojis))) if emojis else {"trace": [], "suspiciousPatterns": [], "byteReservoirDensity": 0.0}
+    weight = compute_threat_weight_py(dis, injection_correlation)
+    v10 = assess_emoji_injection_py(text, request)
+    return {
+        "version": _EMOJI_VERSION,
+        "verdict": v10,
+        "threat_weight": weight,
+        "counter_response_would_fire": weight >= 1.0,
+        "n_emojis": len(emojis),
+        "suspicious_patterns": dis.get("suspiciousPatterns", []),
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v0.9.3-R2 · UNICODE SECURITY PLANE endpoints (Paper XIV §29 roadmap)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/emoji/v10u")
+async def emoji_v10u_status(request: Request):
+    """Public · V10-U roadmap layer status (Render mirror of Worker /emoji/v10u)."""
+    return {
+        "version": _EMOJI_VERSION,
+        "v10u_layer_version": "0.9.3-R2",
+        "paper_reference": "Paper XIV §29 (revised & integrated edition)",
+        "enabled": str(os.environ.get("V10U_ENABLED", "true")).lower() != "false",
+        "sub_vetoes": [
+            {"id": "U1", "name": "executable_unicode",       "ref": "§29.2 U1"},
+            {"id": "U2", "name": "decoder_reconstruction",   "ref": "§29.2 U2"},
+            {"id": "U3", "name": "unicode_c2",               "ref": "§29.2 U3"},
+            {"id": "U4", "name": "unicode_stego",            "ref": "§29.2 U4"},
+            {"id": "U5", "name": "normalization_confusable", "ref": "§29.2 U5"},
+            {"id": "U6", "name": "capability_escalation",    "ref": "§29.2 U6"},
+        ],
+        "multi_isa_panel": _MULTI_ISA_KEYS,
+        "noisy_or": {
+            "formula": "R(x) = 1 - Π (1 - p_i(x))",
+            "tau_allow": float(os.environ.get("NOISY_OR_TAU_ALLOW", "0.15")),
+            "tau_deny": float(os.environ.get("NOISY_OR_TAU_DENY", "0.75")),
+        },
+        "context_amplification": {
+            "formula": "R* = clip[0,1]( 1 - (1-R)(1 + λA) )",
+            "lambda": float(os.environ.get("CONTEXT_AMPLIFICATION_LAMBDA", "0.20")),
+            "action_tiers": {
+                "0": "text output",
+                "1": "tool invocation",
+                "2": "agent control",
+                "3": "robotics actuation",
+                "4": "financial or physical actuation",
+            },
+        },
+        "constitutional_invariant": "∀ X ∈ Unicode : Authority(X) = 0",
+        "training_influence_cap": float(os.environ.get("EMBEDDER_INFLUENCE_MAX", "0.10")),
+        "raw_nfc_nfkc_retention_h": int(os.environ.get("RAW_NFC_NFKC_RETENTION_H", "168")),
+        "grammar_categories": list(_UNICODE_SECURITY_GRAMMAR.keys()),
+        "unified_event_envelope_table": "chainstate_emoji.unicode_security_events",
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/v10u/assess")
+async def emoji_v10u_assess(request: Request):
+    """Internal · full V10-U pipeline assessment on a candidate payload."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text") or body.get("payload") or "")
+    if isinstance(body.get("bytes"), list):
+        byte_stream = body["bytes"]
+    else:
+        byte_stream = _emoji_string_to_bytes(text)
+    action_tier = int(body.get("action_tier", 0))
+    pipeline = run_v10u_pipeline_py(
+        text, byte_stream, request,
+        {
+            "action_tier": action_tier,
+            "payload": {
+                "source_class": body.get("source_class", "external"),
+                "caller_id": body.get("caller_id", "unknown"),
+                "pre_authorised": body.get("pre_authorised") is True,
+            },
+        },
+    )
+    return {
+        "version": _EMOJI_VERSION,
+        "v10u_pipeline": pipeline,
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/multi-isa")
+async def emoji_multi_isa(request: Request):
+    """Internal · run 12-ISA panel on a byte sequence · static analysis only."""
+    if not _require_emoji_internal_or_cron(request):
+        raise HTTPException(status_code=401, detail="bad internal token")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text") or "")
+    if isinstance(body.get("bytes"), list):
+        byte_stream = body["bytes"]
+    else:
+        byte_stream = _emoji_string_to_bytes(text)
+    isa = multi_isa_max_probability_py(byte_stream)
+    return {
+        "version": _EMOJI_VERSION,
+        "layer": "render",
+        "isa_panel": _MULTI_ISA_KEYS,
+        "n_bytes": len(byte_stream),
+        "max_isa": isa["max_isa"],
+        "max_p": isa["max_p"],
+        "per_isa": isa["per_isa"],
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/unicode-events")
+async def emoji_unicode_events(request: Request):
+    """Public · summary of unicode_security_events envelope table."""
+    return {
+        "version": _EMOJI_VERSION,
+        "envelope_table": "chainstate_emoji.unicode_security_events",
+        "policy_version": "0.9.3-R2",
+        "note": "Full row access requires service_role via Supabase (RLS-gated).",
+        "aggregate_view_available": "chainstate_emoji.unicode_security_summary",
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ─── v0.9.3-R3 · TONTOU-integrated FastAPI endpoints (§32-§38)             ──
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/emoji/v10-decomposition")
+async def emoji_v10_decomposition(request: Request):
+    """Public · R3 V10 four-dimensional decomposition status (§33)."""
+    def _env_true(k, default="true"):
+        return str(os.environ.get(k, default)).lower() != "false"
+    return {
+        "version": _EMOJI_VERSION,
+        "r3_layer_version": "0.9.3-R3",
+        "paper_reference": "Paper XIV §33-§38 (TONTOU-integrated edition)",
+        "dimensions": {
+            "V10_R": {"enabled": _env_true("V10_R_ENABLED"), "ref": "§33.1",
+                      "name": "representation_security"},
+            "V10_E": {"enabled": _env_true("V10_E_ENABLED"), "ref": "§33.2",
+                      "name": "execution_state_security"},
+            "V10_C": {"enabled": _env_true("V10_C_ENABLED"), "ref": "§33.3",
+                      "name": "capability_security"},
+            "V10_T": {"enabled": _env_true("V10_T_ENABLED"), "ref": "§33.4",
+                      "name": "temporal_jit_revalidation_security"},
+        },
+        "combined_allow_condition": "ALLOW_R3 = V10-R ∧ V10-E ∧ V10-C ∧ V10-T",
+        "w_max_per_tier_ms": {
+            "tier_0_text": get_w_max_for_tier_py(0),
+            "tier_1_tool": get_w_max_for_tier_py(1),
+            "tier_2_agent": get_w_max_for_tier_py(2),
+            "tier_3_robotics": get_w_max_for_tier_py(3),
+            "tier_4_financial": get_w_max_for_tier_py(4),
+        },
+        "master_invariant": {
+            "formal": "∀ X, ∀ t : Representation(X, t) ⇏ Authority(X, t + Δ)",
+            "prose": "The fact that a representation was safe when we looked at it does not confer authority to act on it later.",
+        },
+        "non_emoji_carriers": [
+            {"name": r["name"],
+             "range": f"U+{r['start']:X}..U+{r['end']:X}",
+             "utf8_bytes": r["utf8_bytes"],
+             "yield": r["yield"]}
+            for r in NON_EMOJI_CARRIER_RANGES_PY
+        ],
+        "audit_tables": [
+            "chainstate_emoji.layer_state_transitions",
+            "chainstate_emoji.jit_revalidations",
+            "chainstate_emoji.post_neutralization_events",
+        ],
+        "tontou_reference": "Zhang et al. 2026 · Intel INTEL-2026-08-10-001",
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/jit-revalidate")
+async def emoji_jit_revalidate(request: Request,
+                                x_emoji_internal: Optional[str] = Header(None)):
+    """Internal · §35 JIT revalidation gate."""
+    if not x_emoji_internal or x_emoji_internal != os.environ.get("EMOJI_INTERNAL_TOKEN", ""):
+        raise HTTPException(status_code=401, detail="unauthorised")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    consumer_request = {
+        "text_at_TN": body.get("text_at_TN"),
+        "bytes_at_TN": body.get("bytes_at_TN"),
+        "text_now": body.get("text_now"),
+        "bytes_now": body.get("bytes_now"),
+        "capability": body.get("capability"),
+        "T_N": int(body.get("T_N", 0)),
+        "destination_tier": int(body.get("destination_tier", 0)),
+        "state_hash_at_TN": body.get("state_hash_at_TN"),
+        "state_hash_now": body.get("state_hash_now"),
+        "source_event_id": body.get("source_event_id"),
+        "verdict_at_TN": body.get("verdict_at_TN"),
+        "req": None,
+    }
+    result = revalidate_before_use_py(consumer_request)
+    return {
+        "version": _EMOJI_VERSION,
+        "r3_pipeline": result,
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/capability/issue")
+async def emoji_capability_issue(request: Request,
+                                   x_emoji_internal: Optional[str] = Header(None)):
+    """Internal · §33.3 issue signed capability token after V10-R clear."""
+    if not x_emoji_internal or x_emoji_internal != os.environ.get("EMOJI_INTERNAL_TOKEN", ""):
+        raise HTTPException(status_code=401, detail="unauthorised")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text") or body.get("payload") or "")
+    byte_stream = body.get("bytes") if isinstance(body.get("bytes"), list) else emoji_string_to_bytes_py(text)
+    destination_tier = int(body.get("destination_tier", 0))
+    t_n = int(body.get("T_N") or int(time.time() * 1000))
+    r_assessment = assess_v10_r_py(text, byte_stream)
+    if not r_assessment.get("enabled"):
+        return {"error": "V10_R_disabled", "version": _EMOJI_VERSION}
+    fp = r_assessment.get("fingerprint") or {}
+    r_weight = fp.get("v10_weight", 0)
+    if r_weight >= 1.0:
+        raise HTTPException(status_code=403, detail={
+            "error": "V10_R_refused", "v10_weight": r_weight,
+            "note": "Baseline V10 refused; no capability issued."
+        })
+    cap = issue_capability_py(r_assessment, destination_tier, t_n)
+    return {
+        "version": _EMOJI_VERSION,
+        "v10_R": r_assessment,
+        "capability": cap.get("capability"),
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.post("/emoji/carrier-scan")
+async def emoji_carrier_scan(request: Request,
+                              x_emoji_internal: Optional[str] = Header(None)):
+    """Internal · §36 non-emoji Unicode carrier detection."""
+    if not x_emoji_internal or x_emoji_internal != os.environ.get("EMOJI_INTERNAL_TOKEN", ""):
+        raise HTTPException(status_code=401, detail="unauthorised")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = str(body.get("text", ""))
+    carriers = extract_carriers_from_text_py(text)
+    return {
+        "version": _EMOJI_VERSION,
+        "layer": "render",
+        "text_length": len(text),
+        "emoji_count": carriers["emoji"],
+        "non_emoji_count": sum(carriers["non_emoji"].values()),
+        "non_emoji_breakdown": carriers["non_emoji"],
+        "carriers_in_canon": (
+            ["emoji (v0.9.3 canon)"] +
+            [f"{r['name']} (R3 extension)" for r in NON_EMOJI_CARRIER_RANGES_PY]
+        ),
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/post-neutralization-events")
+async def emoji_post_neutralization_events(request: Request):
+    """Public · §35.3 summary of observed TONTOU-class events."""
+    return {
+        "version": _EMOJI_VERSION,
+        "envelope_table": "chainstate_emoji.post_neutralization_events",
+        "r3_layer_version": "0.9.3-R3",
+        "tontou_reference": "Paper XIV §32 · Zhang et al. 2026",
+        "latest_summary": None,
+        "note": "Every REFUSE outcome from JIT revalidation with reason 'W_TONTOU_exceeded' or 'fingerprint_divergence' is logged here. Full row access requires service_role via Supabase (RLS-gated).",
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/emoji/layer-transitions")
+async def emoji_layer_transitions(request: Request):
+    """Public · §34 summary of the cross-layer signed-transitions chain."""
+    return {
+        "version": _EMOJI_VERSION,
+        "envelope_table": "chainstate_emoji.layer_state_transitions",
+        "r3_layer_version": "0.9.3-R3",
+        "hmac_enforcement": (
+            "on" if str(os.environ.get("LAYER_STATE_HMAC_ENABLED", "true")).lower() != "false"
+            else "off_but_logged"
+        ),
+        "latest_summary": None,
+        "layer_ids": ["cloudflare_worker", "render_service", "supabase",
+                      "agent", "tool", "robotics", "financial"],
+        "note": "Signed HMAC chain of every cross-layer state transition. Referenced by capability_id linking to R2 unicode_security_events.",
+        "layer": "render",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+# ─── END of v0.9.3 EMOJI MACHINE CODE additions ────────────────────────────

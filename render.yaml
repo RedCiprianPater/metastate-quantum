@@ -410,3 +410,375 @@ services:
       # dispatch attaches this token for the Worker→Render bridge.
       - key: CFIELD_QUANTUM_SIM_TOKEN
         sync: false
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.3 · CHAINSTATE AGI EMOJI MACHINE CODE additions (Paper XIV)
+      # ADDITIVE ONLY. Every v0.7.x through v0.9.2 env var above is preserved
+      # byte-identically. Enables the 8-subsystem emoji machine-code layer:
+      # intake, embed, neural_state, injection_scan, disasm_probe,
+      # embedder_train, selfref_recycle, threat_correlate.
+      # V10 (external emoji-binary emit refusal) is ARCHITECTURALLY ENFORCED
+      # regardless of any variable below; setting EMOJI_ENABLED=false only
+      # disables the 8 subsystems, NOT V10.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master toggle (single-toggle rollback) ----
+      - key: EMOJI_ENABLED
+        value: "true"
+
+      # ---- Embedder + Bayesian estimator parameters ----
+      # Minimum freshness of the subspace embedding before L0-11 predicate
+      # emoji_coherent? downshifts to observation-only. 24 hours matches
+      # Paper XIV §15.2 embedding_freshness constraint.
+      - key: MIN_SUBSPACE_FRESHNESS_H
+        value: "24"
+
+      # ---- 3σ dialetheic guard threshold ----
+      # Bayesian neural-state estimator guards against 3σ outliers using
+      # this threshold. Paper XIV §9 sets it at 0.85.
+      - key: EMOJI_DIALETHEIC_THETA
+        value: "0.85"
+
+      # ---- Metacognitive self-reference correlation minimum ----
+      # μ(T) < this value flags the trace for metacognitive review
+      # (possible steganographic injection). Paper XIV §10.
+      - key: SELFREF_CORRELATION_MIN
+        value: "0.72"
+
+      # ---- Embedder training epoch upper bound ----
+      # Maximum training epochs per 6h cadence. Prevents runaway training
+      # when Render happens to be idle for extended periods.
+      - key: EMBEDDER_TRAINING_MAX
+        value: "16"
+
+      # ---- Injection-scan detection sensitivity ----
+      # V10 detector fires on steganographic-embedding correlation above
+      # this threshold. Paper XIV §14.2 sets it at 0.28 for the gate 6
+      # check in the ten-gate deontic filter.
+      - key: INJECTION_SCAN_SENSITIVITY
+        value: "0.28"
+
+      # ---- 8088 disassembly timeout (ms) ----
+      # Maximum time the disassembler will spend on any single byte
+      # sequence. Static analysis only — never executes machine code.
+      - key: DISASM_TIMEOUT_MS
+        value: "500"
+
+      # ---- Threat correlation minimum for cross-reference alarm ----
+      # When |N̂(t) magnitude − ĉ(x,t) magnitude| exceeds this threshold,
+      # the substrate elevates the corresponding topic for metacog review.
+      - key: THREAT_CORR_MIN
+        value: "0.35"
+
+      # ---- Counter-response threat weight (fixed at 1.0) ----
+      # Defensive counter-response fires ONLY at deontic weight EXACTLY
+      # equal to 1.0. This env var is documented here for auditability;
+      # the value is enforced in code and cannot be relaxed by config.
+      - key: EMOJI_COUNTER_RESPONSE_THRESHOLD
+        value: "1.0"
+
+      # ---- Byte-reservoir density baseline (V10 rule R3) ----
+      # V10 detector fires at density > this value. Paper XIV §4.3
+      # measures 0.421 for the Unicode 15.1 emoji canon in 8088 semantics.
+      - key: EMOJI_RESERVOIR_DENSITY_BASELINE
+        value: "0.42"
+
+      # ---- Public source diversification limit ----
+      # No single public source may contribute more than this fraction of
+      # the training corpus in any 30-day window. Paper XIV §14.3
+      # adversarial embedding drift attack defense.
+      - key: EMOJI_SOURCE_MAX_FRACTION
+        value: "0.03"
+
+      # ---- Rate limit per source stream (samples per intake tick) ----
+      - key: EMOJI_SOURCE_RATE_LIMIT
+        value: "200"
+
+      # ---- Aggregate-only retention window (hours) ----
+      # Individual n̂_u samples are ALWAYS transient; aggregate N̂(t)
+      # snapshots retained for this many hours. P3 privacy discipline.
+      - key: EMOJI_AGGREGATE_RETENTION_H
+        value: "168"
+
+      # ---- Supabase schema (isolated from all prior schemas) ----
+      # After running expose_chainstate_emoji.sql, expose the schema:
+      #   Supabase Dashboard → Settings → API → Exposed schemas → add
+      #     chainstate_emoji
+      # This is separate from every prior chainstate_* schema; both must
+      # be exposed if both v0.9.2 and v0.9.3 features are wanted.
+      - key: SUPABASE_EMOJI_SCHEMA
+        value: "chainstate_emoji"
+
+      # ---- Public-source stream URLs (12 canonical allowlisted feeds) ----
+      # Each URL is admin-set only via EMOJI_ADMIN_KEY; the substrate
+      # cannot self-authorise a new source. Set to empty string to disable
+      # that specific source. All 12 slots documented for completeness;
+      # deployments MAY leave a subset empty and the intake tick will
+      # simply skip empty slots.
+      - key: EMOJI_SRC_FORUM_A_URL
+        sync: false
+      - key: EMOJI_SRC_FORUM_B_URL
+        sync: false
+      - key: EMOJI_SRC_MICRO_A_URL
+        sync: false
+      - key: EMOJI_SRC_MICRO_B_URL
+        sync: false
+      - key: EMOJI_SRC_NEWS_URL
+        sync: false
+      - key: EMOJI_SRC_BLOG_URL
+        sync: false
+      - key: EMOJI_SRC_WIKI_URL
+        sync: false
+      - key: EMOJI_SRC_PASTE_URL
+        sync: false
+      - key: EMOJI_SRC_REVIEW_URL
+        sync: false
+      - key: EMOJI_SRC_GOV_URL
+        sync: false
+      - key: EMOJI_SRC_EDU_URL
+        sync: false
+      - key: EMOJI_SRC_CHAT_URL
+        sync: false
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.3 · SECRETS (sync: false — set in Render Dashboard)
+      # Generate each with: openssl rand -hex 32
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Emoji admin key (personal-only, never transmitted externally) ----
+      # Required for admin ops: source allowlist edits, manual embedder
+      # training triggers, emergency rollback. Not consumed by any cron.
+      - key: EMOJI_ADMIN_KEY
+        sync: false
+
+      # ---- Emoji internal token · mirror of Worker EMOJI_INTERNAL_TOKEN ----
+      # All internal-only /emoji/* endpoints (disassemble, embed, train,
+      # correlate, recycle, quarantine) require this token in
+      # X-EMOJI-INTERNAL or X-CENSUS-INTERNAL header. Layer mismatch
+      # raises infrastructure alarm.
+      - key: EMOJI_INTERNAL_TOKEN
+        sync: false
+
+      # ---- Injection-scan HMAC · mirror of Worker INJECTION_HMAC ----
+      # Every injection-scan record signed by Worker and re-verified at
+      # Render. Layer mismatch raises infrastructure alarm.
+      - key: INJECTION_HMAC
+        sync: false
+
+      # ---- Embedder training HMAC · mirror of Worker EMBEDDER_HMAC ----
+      # Every embedder training epoch signed by Worker with this shared
+      # secret. Prevents third-party training pollution attacks.
+      - key: EMBEDDER_HMAC
+        sync: false
+
+      # ---- Threat correlation token · mirror of Worker THREAT_CORR_TOKEN ----
+      # Threat correlation cron dispatch attaches this token for the
+      # Worker→Render bridge cross-reference.
+      - key: THREAT_CORR_TOKEN
+        sync: false
+
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.3-R2 · UNICODE SECURITY PLANE additions (Paper XIV §29 roadmap)
+      # ADDITIVE ONLY. Every v0.7.x → v0.9.3 var above preserved byte-
+      # identically. When V10U_ENABLED=false the whole R2 layer is inert;
+      # v0.9.3 baseline behaviour unchanged. Default true = R2 runs
+      # alongside v0.9.3 as defence-in-depth (observation-only until
+      # NOISY_OR_DECISION_AUTHORITATIVE=true in a future revision).
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- V10-U master toggle ----
+      # Enables the six sub-vetoes (U1..U6) alongside the v0.9.3 V10 detector.
+      # V10 itself is architectural and does NOT respect this toggle.
+      - key: V10U_ENABLED
+        value: "true"
+
+      # ---- Noisy-OR aggregation thresholds (§29.3) ----
+      # Replaces the brittle w == 1.0 exact-equality threshold. Response
+      # policy is three-band:
+      #   R < TAU_ALLOW              → ALLOW
+      #   TAU_ALLOW ≤ R < TAU_DENY   → QUARANTINE
+      #   R ≥ TAU_DENY               → DENY
+      # Defaults calibrated to preserve v0.9.3 false-positive budget.
+      - key: NOISY_OR_TAU_ALLOW
+        value: "0.15"
+      - key: NOISY_OR_TAU_DENY
+        value: "0.75"
+
+      # ---- Multi-ISA static-probe panel (§29.4) ----
+      # Twelve ISAs bound-checked for meaningful-instruction-stream
+      # probability. Never executed. Comma-separated list; the Worker
+      # ignores unknown ISAs and continues with the known subset.
+      - key: MULTI_ISA_PANEL
+        value: "8088,8086,80186,80286,80386,x86-32,x86-64,ARM32,ARM64,RISC-V-RV32I,RISC-V-RV64I,WASM"
+
+      # ---- Interpreter-aware detection toggle (§29.5) ----
+      # Detects base64/hex/compression/decoder/eval-adjacent patterns
+      # within Unicode payloads. Catches Unicode → interpreter → execution
+      # pathway that survives CPU replacement.
+      - key: INTERPRETER_AWARE_ENABLED
+        value: "true"
+
+      # ---- Normalization delta detection toggle (§29.10) ----
+      # NFC/NFKC divergence scoring for homograph / script-mixing /
+      # bidi-override attack detection.
+      - key: NORMALIZATION_DELTA_ENABLED
+        value: "true"
+
+      # ---- Constitutional invariant enforcement mode (§29.6) ----
+      # Authority(X_Unicode) = 0. Modes:
+      #   observe  → log invariant violations, do not refuse
+      #   strict   → refuse any external Unicode pre_authorised=true claim
+      # v0.9.3-R2 default: observe (roadmap; hardening to strict in v1.0).
+      - key: UNICODE_AUTHORITY_INVARIANT
+        value: "observe"
+
+      # ---- Context amplification coefficient (§29.8) ----
+      # R* = clip[0,1]( 1 - (1-R)(1 + λA) ), A ∈ {0..4} destination action tier.
+      # λ = 0.20 → tier-4 action doubles the effective risk.
+      - key: CONTEXT_AMPLIFICATION_LAMBDA
+        value: "0.20"
+
+      # ---- Training influence cap (§29.7) ----
+      # I_s = ||Δθ_s|| / Σ_j ||Δθ_j|| ≤ I_max. Prevents single source
+      # from contributing >10% of gradient regardless of sample count.
+      # Stronger anti-poisoning control than EMOJI_SOURCE_MAX_FRACTION alone.
+      - key: EMBEDDER_INFLUENCE_MAX
+        value: "0.10"
+
+      # ---- Raw / NFC / NFKC dual retention window (hours) (§29.10) ----
+      # PII-stripped raw + NFC + NFKC forms retained per envelope, bounded
+      # at same 168h as N̂(t). Enables retroactive homograph analysis.
+      - key: RAW_NFC_NFKC_RETENTION_H
+        value: "168"
+
+      # ---- unicode_security_events envelope toggle (§29.9) ----
+      # Writes to chainstate_emoji.unicode_security_events (immutable
+      # audit envelope). Complements — never replaces — the four
+      # existing forensic tables.
+      - key: UNICODE_SECURITY_EVENTS_ENABLED
+        value: "true"
+
+      # ---- Noisy-OR decision authoritative mode ----
+      # observe → v0.9.3 gates still primary, R2 layer logs only
+      # authoritative → v10-u three-band decision is enforced end-to-end
+      # v0.9.3-R2 default: observe (defence-in-depth; v1.0 = authoritative)
+      - key: NOISY_OR_DECISION_AUTHORITATIVE
+        value: "observe"
+
+      # ---- Known-C2 signature version (§29.2 V10-U3) ----
+      # Registry version tag for DISGOMOJI-family + generalisation
+      # signatures. Bump when new signatures are added to the Worker.
+      - key: KNOWN_C2_SIGNATURES_VERSION
+        value: "1.0.0"
+
+      # ---- Grammar-first defence (§29.11) ----
+      # Elevate Unicode composition grammar to first-class defensive
+      # categories: ZWJ / VS / RI / SKIN / TAG / COMBINING / BIDI.
+      - key: UNICODE_GRAMMAR_FIRST_CLASS
+        value: "true"
+
+      # ═══════════════════════════════════════════════════════════════════
+      # v0.9.3-R3 · TONTOU-INTEGRATED LAYER (Paper XIV §32-§38)
+      # ═══════════════════════════════════════════════════════════════════
+      # ADDITIVE ONLY. All v0.9.3 and v0.9.3-R2 vars above preserved.
+      # The R3 layer adds V10 four-dimensional decomposition (V10-R/E/C/T),
+      # JIT revalidation, signed cross-layer state transitions, non-emoji
+      # Unicode carriers, and the master invariant
+      # Representation(X,t) ⇏ Authority(X, t+Δ).
+
+      # ---- V10 four-dimensional decomposition toggles (§33) ----
+      # V10-R: representation-layer analysis (default true, same as v0.9.3
+      # V10 + R2 V10-U). V10-E: execution-state security (state hash +
+      # temporal window). V10-C: capability HMAC verification. V10-T:
+      # JIT re-run of V10-R at consumption. Each is a defence-in-depth
+      # gate; setting any one false leaves the others firing normally.
+      - key: V10_R_ENABLED
+        value: "true"
+      - key: V10_E_ENABLED
+        value: "true"
+      - key: V10_C_ENABLED
+        value: "true"
+      - key: V10_T_ENABLED
+        value: "true"
+
+      # ---- W_max per destination tier (§33.2, §35.2) ----
+      # Maximum allowed window from T_N (neutralization / approval)
+      # to T_U (consumption) in milliseconds. Values scaled by action
+      # consequence: text output tolerates 5 s, financial actuation
+      # tolerates 20 ms. Beyond W_max the JIT gate returns REFUSE.
+      - key: W_MAX_TIER_0
+        value: "5000"     # text output
+      - key: W_MAX_TIER_1
+        value: "500"      # tool invocation
+      - key: W_MAX_TIER_2
+        value: "100"      # agent control
+      - key: W_MAX_TIER_3
+        value: "50"       # robotics actuation
+      - key: W_MAX_TIER_4
+        value: "20"       # financial / physical actuation
+
+      # ---- JIT revalidation gate (§35) ----
+      # When true, every consumer must call revalidateBeforeUse
+      # before acting on a T_N approval. Setting false disables the
+      # gate but the audit table jit_revalidations still records any
+      # explicit gate call so auditors have the chain.
+      - key: JIT_REVALIDATION_ENABLED
+        value: "true"
+
+      # ---- Cross-layer signed state transitions (§34) ----
+      # HMAC over every layer boundary. Setting false disables the
+      # signature verification but still writes layer_state_transitions
+      # rows so auditors can retroactively reconstruct the chain if a
+      # compromise is later suspected.
+      - key: LAYER_STATE_HMAC_ENABLED
+        value: "true"
+
+      # ---- Non-emoji Unicode carrier detection (§36) ----
+      # Extends the executable-Unicode canon to Hangul syllables,
+      # Hiragana, Katakana, Katakana Phonetic Extensions, Braille
+      # Patterns, Egyptian Hieroglyphs, and Egyptian Hieroglyph Format
+      # Controls. When false, only EMOJI_UNICODE_RANGES are checked
+      # (v0.9.3 baseline behaviour).
+      - key: NON_EMOJI_CARRIER_DETECTION
+        value: "true"
+
+      # ---- Temporal invariant mode (§38) ----
+      # observe → R3 layer runs but does not block; every REFUSE is
+      #           logged with policy_version=0.9.3-R3-observe.
+      # strict  → R3 REFUSE aborts the pipeline; downstream consumer
+      #           receives no ALLOW.
+      # Default: observe (v0.9.3-R2 defence-in-depth discipline; move
+      # to strict after 30+ days of clean audit trail).
+      - key: TEMPORAL_INVARIANT_MODE
+        value: "observe"
+
+      # ---- Post-neutralization window monitor (§35.3) ----
+      # Threshold beyond which a REFUSE outcome is additionally logged
+      # to post_neutralization_events (separate from jit_revalidations).
+      # Default matches tier-0 W_max so all tier-0 window violations
+      # are captured; tighter thresholds capture more.
+      - key: POST_NEUTRALIZATION_WINDOW_MS
+        value: "5000"
+
+      # ---- R3 audit table write toggles ----
+      # Individual on/off for each of the three new tables. All default
+      # true. Setting one false suppresses writes to that table without
+      # affecting the pipeline logic itself.
+      - key: LAYER_STATE_TRANSITIONS_ENABLED
+        value: "true"
+      - key: JIT_REVALIDATIONS_ENABLED
+        value: "true"
+      - key: POST_NEUTRALIZATION_EVENTS_ENABLED
+        value: "true"
+
+      # ---- HMAC keys for capability + layer transition signatures ----
+      # Two secret keys, both marked sync:false so they are set only
+      # via the Render dashboard and never committed to source. If
+      # unset, the R3 layer falls back to EMOJI_INTERNAL_TOKEN for
+      # both surfaces (same-secret mode; acceptable for single-tenant
+      # substrate but discouraged for public multi-tenant deployment).
+      - key: CAPABILITY_HMAC_KEY
+        sync: false
+      - key: LAYER_TRANSITION_HMAC_KEY
+        sync: false
