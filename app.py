@@ -2927,6 +2927,7 @@ def revalidate_before_use_py(consumer_request: Dict[str, Any],
 
 
 
+class _EmojiSubspaceEmbedder:
     """Contrastive-trained 768-dim emoji embedder (fail-soft to hash projection)."""
 
     def __init__(self):
