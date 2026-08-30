@@ -782,3 +782,83 @@ services:
         sync: false
       - key: LAYER_TRANSITION_HMAC_KEY
         sync: false
+
+      # ═══════════════════════════════════════════════════════════════════
+      # v0.9.4 · PLANET ENGINE (Reality-State revision) · Render compute tier
+      # All additive. Planet Engine compute endpoints are fail-soft: if these
+      # are unset they default as shown. Simulation/perception safety is
+      # code-level and needs NO human-in-the-loop; only Tier 3–4 actuation
+      # requires human authorization.
+      # ═══════════════════════════════════════════════════════════════════
+
+      # ---- master enable for the Planet Engine compute tier ----
+      - key: PLANET_ENGINE_ENABLED
+        value: "true"
+
+      # ---- Reality-State / world-model behaviour ----
+      # Supabase schema that holds the world-state + census audit tables.
+      # Must match the schema created by the SQL in chainstate_census_schema.sql.
+      - key: SUPABASE_CENSUS_SCHEMA
+        value: "chainstate_census"
+
+      # ---- egress isolation (advisory mirror on Render; authoritative Γ is at the Worker) ----
+      # These mirror the Worker's fail-closed egress filter so agents can
+      # self-censor before requesting emission. The Worker remains authoritative.
+      - key: EGRESS_FILTER_MODE
+        value: "fail_closed"
+      - key: UNLAWFUL_OUTPUT_STANDARD
+        value: "strictest_global"
+      - key: SELF_REPRESENTATION_LOCK
+        value: "on"
+      - key: V10U_EGRESS_RESCAN
+        value: "on"
+
+      # ---- ExtraTrees / EML material + threat classifiers (§36.2) ----
+      # If scikit-learn is installed (see requirements.txt) the compute tier
+      # can use ExtraTrees ensembles for material/threat classification.
+      # Interpretable, retrainable, and safe to run without human review.
+      - key: PLANET_EXTRATREES_ENABLED
+        value: "true"
+      - key: PLANET_EXTRATREES_N_ESTIMATORS
+        value: "300"
+      - key: PLANET_EXTRATREES_MAX_DEPTH
+        value: "16"
+
+      # ---- model-poisoning defense (§36.2) ----
+      # A new material association must be corroborated by N_min independent
+      # sources and pass cross-domain validation before promotion
+      # candidate → validated → trusted_prior.
+      - key: PLANET_POISON_N_MIN
+        value: "3"
+      - key: PLANET_POISON_XVAL_THRESHOLD
+        value: "0.85"
+
+      # ---- action-tier windows (ms) and intelligence-to-risk thresholds ----
+      # Mirror of the Worker tier table (Paper §12.6 · §42). Informational on
+      # Render; the Worker enforces. Tier 3–4 always require human sign-off.
+      - key: PLANET_W_MAX_TIER_0
+        value: "5000"
+      - key: PLANET_W_MAX_TIER_1
+        value: "500"
+      - key: PLANET_W_MAX_TIER_2
+        value: "100"
+      - key: PLANET_W_MAX_TIER_3
+        value: "50"
+      - key: PLANET_W_MAX_TIER_4
+        value: "20"
+      - key: PLANET_RHO_TIER_0
+        value: "1"
+      - key: PLANET_RHO_TIER_1
+        value: "2"
+      - key: PLANET_RHO_TIER_2
+        value: "4"
+      - key: PLANET_RHO_TIER_3
+        value: "8"
+      - key: PLANET_RHO_TIER_4
+        value: "16"
+
+      # ---- egress HMAC key (non-action receipts + egress decision signing) ----
+      # Marked sync:false — set only via the Render dashboard, never committed.
+      # If unset, the Planet layer falls back to CAPABILITY_HMAC_KEY.
+      - key: EGRESS_HMAC_KEY
+        sync: false

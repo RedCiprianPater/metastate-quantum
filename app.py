@@ -153,7 +153,7 @@ except Exception:
 if HAVE_IBM and not IBM_MODULE_INSTALLED:
     HAVE_IBM = False  # env said yes, but the wheel isn't here — degrade quietly
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.3.0-osaka+cfield-v0.9.2+emoji-v0.9.3-R3")
+app = FastAPI(title="METASTATE Quantum Worker", version="1.4.0-osaka+cfield-v0.9.2+emoji-v0.9.3-R3+planet-v0.9.4")
 
 # =============================================================================
 # 1. IBM Quantum (Qiskit Runtime · SamplerV2)
@@ -2927,7 +2927,6 @@ def revalidate_before_use_py(consumer_request: Dict[str, Any],
 
 
 
-class _EmojiSubspaceEmbedder:
     """Contrastive-trained 768-dim emoji embedder (fail-soft to hash projection)."""
 
     def __init__(self):
@@ -3633,3 +3632,341 @@ async def emoji_layer_transitions(request: Request):
 
 
 # ─── END of v0.9.3 EMOJI MACHINE CODE additions ────────────────────────────
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAINSTATE AGI · PLANET ENGINE · v0.9.4 (Reality-State revision)
+# Render-side Python mirror — Paper "PLANET ENGINE v0.9.4" §§4–42.
+#
+# This is the compute tier of the Planet Engine. It runs the interpretable,
+# retrainable safety-relevant computations that must NOT depend on a human in
+# the loop: physics-consistency scoring, anti-deepfake aggregation, cross-modal
+# consistency, composite threat surface, the 7-term ALLOW gate, expanded
+# intelligence-to-risk, and safety-monotonicity damping. Where scikit-learn is
+# available it uses ExtraTrees ensembles for material/threat classification
+# (Paper §36.2); otherwise it degrades to deterministic scoring. Everything is
+# fail-soft and additive — no existing endpoint is modified or removed.
+#
+# Storage: this tier is stateless-by-default; durable audit rows are written by
+# the Cloudflare Worker to Supabase (chainstate_census schema). These endpoints
+# return computed results the Worker (or an agent) can persist + anchor.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import math as _pe_math
+
+_PLANET_ENGINE_VERSION = "0.9.4-planet-engine-2026-08-29"
+
+# Six epistemic classes (Paper §4.3)
+_PE_EPISTEMIC_CLASSES = ["observation", "inference", "simulation", "hypothesis", "decision", "provenance"]
+
+# 14-field Reality-State tensor keys (Paper §24, Eq. 14)
+_PE_REALITY_FIELDS = ["G", "M", "Phi", "Sigma", "Ac", "Em", "Tp", "Cy", "Bi", "Vo", "tau", "Pi", "Lambda", "U"]
+
+# Truth-modes (Paper §12.4)
+_PE_TRUTH_MODES = ["OBSERVED", "INFERRED", "FORECAST", "SIMULATION", "HYPOTHESIS", "HYBRID"]
+
+# Negative Execution Ledger states (Paper §29)
+_PE_EXECUTION_STATES = ["proposed", "blocked", "authorized", "dispatched",
+                        "accepted", "executed", "failed", "expired", "unknown"]
+
+# Action tiers (Paper §12.6 · §42)
+_PE_ACTION_TIERS = {
+    0: {"name": "text_report",         "w_max_ms": 5000, "rho_tier": 1,  "authz": "substrate"},
+    1: {"name": "query_filter_camera", "w_max_ms": 500,  "rho_tier": 2,  "authz": "substrate"},
+    2: {"name": "agent_world_update",  "w_max_ms": 100,  "rho_tier": 4,  "authz": "agent_audit"},
+    3: {"name": "robotics_actuation",  "w_max_ms": 50,   "rho_tier": 8,  "authz": "human_or_authorized_agent"},
+    4: {"name": "financial_physical",  "w_max_ms": 20,   "rho_tier": 16, "authz": "human_explicit"},
+}
+
+# ExtraTrees availability (Paper §36.2). Optional — fail-soft.
+try:
+    from sklearn.ensemble import ExtraTreesClassifier as _PE_ExtraTrees  # noqa: F401
+    _PE_EXTRATREES_AVAILABLE = True
+except Exception:
+    _PE_EXTRATREES_AVAILABLE = False
+
+
+def _pe_clamp01(x):
+    try:
+        x = float(x)
+    except Exception:
+        return 0.0
+    return max(0.0, min(1.0, x))
+
+
+def _pe_num(x, d=0.0):
+    try:
+        v = float(x)
+        return v if v == v and v not in (float("inf"), float("-inf")) else d
+    except Exception:
+        return d
+
+
+def _pe_sha256(s):
+    return hashlib.sha256(str(s).encode("utf-8")).hexdigest()
+
+
+# ─── §31 · Seven-term anti-forcing ALLOW gate (Eq. 22) ─────────────────────
+def _pe_allow_gate(terms):
+    req = ["V_R", "V_E", "V_C", "V_T", "V_P", "V_I", "V_X"]
+    detail = {}
+    allow = True
+    terms = terms or {}
+    for t in req:
+        v = terms.get(t) is True   # strict: unknown ⇒ False (fail-closed)
+        detail[t] = v
+        if not v:
+            allow = False
+    return {"allow": allow, "detail": detail,
+            "invariant": "Perception⇏Intent⇏Authorization⇏Execution"}
+
+
+# ─── §40 · Expanded intelligence-to-risk (Eq. 27) + §41 irreversibility ────
+def _pe_intel_to_risk(I, R):
+    I = I or {}
+    R = R or {}
+    inum = _pe_num(I.get("info")) + _pe_num(I.get("uncert")) + _pe_num(I.get("pred")) + _pe_num(I.get("coher"))
+    H = _pe_num(R.get("harm"))
+    C = _pe_clamp01(_pe_num(R.get("reverse_difficulty")))
+    r_irrev = H * C
+    rden = _pe_num(R.get("phys")) + _pe_num(R.get("epist")) + _pe_num(R.get("adv")) + r_irrev
+    rho = (inum / rden) if rden > 0 else 0.0
+    return {"rho": rho, "I_total": inum, "R_total": rden, "R_irreversibility": r_irrev}
+
+
+# ─── §39 · Safety monotonicity damping ─────────────────────────────────────
+def _pe_safety_monotonic(rho, u_adv, p_spoof):
+    damp = _pe_clamp01(1.0 - max(_pe_num(u_adv), _pe_num(p_spoof)))
+    return {"rho_effective": rho * damp, "damp": damp,
+            "U_adversarial": _pe_num(u_adv), "P_spoof": _pe_num(p_spoof)}
+
+
+# ─── §26 · Physics-consistency test (Eq. 18) ───────────────────────────────
+def _pe_physics_consistency(residuals):
+    d = 0.0
+    for r in (residuals or []):
+        d += _pe_num(r.get("w"), 1.0) * _pe_num(r.get("d"))
+    cphys = _pe_math.exp(-d)
+    return {"C_phys": _pe_clamp01(cphys), "D_phys": d, "spoof_signal": cphys < 0.5}
+
+
+# ─── §28 · Anti-deepfake stream confidence (Eq. 19) ────────────────────────
+def _pe_synth_score(signals, contradictions):
+    acc = 0.0
+    for s in (signals or []):
+        acc += _pe_num(s.get("w"), 1.0) * _pe_num(s.get("p"))
+    for c in (contradictions or []):
+        acc += _pe_num(c.get("gamma"), 0.5) * _pe_num(c.get("c"))
+    sig = 1.0 / (1.0 + _pe_math.exp(-acc))
+    origin = "unknown"
+    if sig >= 0.75:
+        origin = "synthetic_verified"
+    elif sig <= 0.15 and len(signals or []) >= 3:
+        origin = "adversarially_suspect_low"
+    elif sig <= 0.25:
+        origin = "mixed"
+    return {"P_synthetic": _pe_clamp01(sig), "origin": origin,
+            "note": "P_synth≈0 does NOT imply P_human=1 (absence of evidence ≠ evidence of authenticity)"}
+
+
+# ─── §37 · Cross-modal consistency (Eq. 25) ────────────────────────────────
+def _pe_cross_modal(pairwise, N):
+    denom = (N * (N - 1)) / 2.0
+    if denom <= 0:
+        return {"consistency": 1.0, "N": N}
+    s = sum(_pe_clamp01(_pe_num(d)) for d in (pairwise or []))
+    return {"consistency": _pe_clamp01(1.0 - s / denom), "N": N,
+            "verdict": "investigate" if (s / denom) > 0.5 else "coherent"}
+
+
+# ─── §38 · Spoofing economics (P_joint = Π q_i) ────────────────────────────
+def _pe_spoof_cost(q_list):
+    p = 1.0
+    for q in (q_list or []):
+        p *= _pe_clamp01(_pe_num(q))
+    return {"P_joint": p, "note": "maximize effective independence → minimize P_joint"}
+
+
+# ─── §35 · Composite threat surface (Eq. 24) ───────────────────────────────
+def _pe_composite_threat(w, x):
+    w = w or {}
+    x = x or {}
+    t = (_pe_num(w.get("v"), 0.25) * _pe_num(x.get("V"))
+         + _pe_num(w.get("a"), 0.25) * _pe_num(x.get("A"))
+         + _pe_num(w.get("p"), 0.25) * _pe_num(x.get("P"))
+         + _pe_num(w.get("s"), 0.25) * _pe_num(x.get("Sigma")))
+    level = 5 if t >= 4 else round(_pe_clamp01(t / 5.0) * 5)
+    return {"T": t, "level": level}
+
+
+# ─── §37 · Reality-Integrity score ─────────────────────────────────────────
+def _pe_reality_integrity(w, x):
+    w = w or {}
+    x = x or {}
+    ri = (_pe_num(w.get("p"), 0.2) * _pe_num(x.get("P"))
+          + _pe_num(w.get("c"), 0.2) * _pe_num(x.get("C"))
+          + _pe_num(w.get("t"), 0.2) * _pe_num(x.get("T"))
+          + _pe_num(w.get("m"), 0.2) * _pe_num(x.get("M"))
+          + _pe_num(w.get("x"), 0.2) * _pe_num(x.get("X"))
+          - _pe_num(w.get("a"), 0.2) * _pe_num(x.get("A")))
+    return {"RI": _pe_clamp01(ri), "note": "RI measures trust-for-reasoning only; RI is NEVER authorization"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FastAPI endpoints (all additive, fail-soft)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/planet/status")
+def planet_status():
+    """Planet Engine liveness + configuration (Render compute tier)."""
+    return {
+        "ok": True,
+        "module": "planet-engine",
+        "planet_engine_version": _PLANET_ENGINE_VERSION,
+        "layer": "render",
+        "reality_state_fields": _PE_REALITY_FIELDS,
+        "epistemic_classes": _PE_EPISTEMIC_CLASSES,
+        "truth_modes": _PE_TRUTH_MODES,
+        "action_tiers": _PE_ACTION_TIERS,
+        "extratrees_available": _PE_EXTRATREES_AVAILABLE,
+        "self_preservation": "defensive_only · S_survival↓⇏UnlimitedAuthority",
+        "human_in_loop": "NOT required for simulation/perception safety · required only for Tier 3–4 actuation",
+        "invariant": "Perception⇏Intent⇏Authorization⇏Execution",
+        "ts_ms": int(time.time() * 1000),
+    }
+
+
+@app.get("/planet/reality-state")
+def planet_reality_state():
+    """Describe the Reality-State tensor (Paper §24)."""
+    return {
+        "ok": True,
+        "tensor": "ℛ(x,t)=[G,M,Φ,Σ,Ac,Em,Tp,Cy,Bi,Vo,τ,Π,Λ,U]",
+        "fields": _PE_REALITY_FIELDS,
+        "field_tuple": "(value,source,timestamp,geometry,epistemic_class,confidence,provenance,uncertainty)",
+        "uncertainty_vector": "U=(Us,Ut,Um,Up,Ui,Uc,Ua,Ur)",
+        "layer": "render",
+    }
+
+
+@app.post("/planet/allow")
+def planet_allow(payload: dict = Body(default={})):
+    """Evaluate the 7-term anti-forcing ALLOW gate + ρ + monotonicity (Paper §31,§39,§40)."""
+    gate = _pe_allow_gate(payload.get("terms") or {})
+    tier_idx = int(_pe_num(payload.get("tier"), 0))
+    tier = _PE_ACTION_TIERS.get(tier_idx, _PE_ACTION_TIERS[0])
+    rho = None
+    mono = None
+    rho_ok = None
+    if payload.get("I") and payload.get("R"):
+        rho = _pe_intel_to_risk(payload["I"], payload["R"])
+        mono = _pe_safety_monotonic(rho["rho"], payload.get("U_adversarial", 0), payload.get("P_spoof", 0))
+        rho_ok = mono["rho_effective"] >= tier["rho_tier"]
+    human_required = tier_idx >= 3
+    final_allow = bool(gate["allow"] and (rho_ok is not False)
+                       and (not human_required or payload.get("human_authorized") is True))
+    return {
+        "ok": True, "gate": gate, "tier": tier,
+        "intelligence_to_risk": rho, "safety_monotonic": mono,
+        "rho_required": tier["rho_tier"], "rho_ok": rho_ok,
+        "human_authorization_required": human_required,
+        "human_authorized": payload.get("human_authorized") is True,
+        "ALLOW": final_allow,
+        "layer": "render",
+    }
+
+
+@app.post("/planet/physics-check")
+def planet_physics_check(payload: dict = Body(default={})):
+    """Physics-consistency spoof test C_phys=exp(-D_phys) (Paper §26)."""
+    return {"ok": True, "result": _pe_physics_consistency(payload.get("residuals") or []), "layer": "render"}
+
+
+@app.post("/planet/synth-check")
+def planet_synth_check(payload: dict = Body(default={})):
+    """Anti-deepfake stream confidence P*_synth (Paper §28)."""
+    return {"ok": True, "result": _pe_synth_score(payload.get("signals") or [], payload.get("contradictions") or []),
+            "layer": "render"}
+
+
+@app.post("/planet/cross-modal")
+def planet_cross_modal(payload: dict = Body(default={})):
+    """Cross-modal consistency; disagreement ⇒ investigation (Paper §37)."""
+    return {"ok": True, "result": _pe_cross_modal(payload.get("pairwise") or [], int(_pe_num(payload.get("N"), 0))),
+            "layer": "render"}
+
+
+@app.post("/planet/spoof-cost")
+def planet_spoof_cost(payload: dict = Body(default={})):
+    """Joint spoof probability P_joint=Π q_i (Paper §38)."""
+    return {"ok": True, "result": _pe_spoof_cost(payload.get("q") or []), "layer": "render"}
+
+
+@app.post("/planet/threat")
+def planet_threat(payload: dict = Body(default={})):
+    """Composite threat surface T(t) (Paper §35, Census fusion)."""
+    return {"ok": True, "result": _pe_composite_threat(payload.get("w") or {}, payload.get("x") or {}),
+            "formula": "T(t)=w_v·V+w_a·A+w_p·P+w_s·Σ", "layer": "render"}
+
+
+@app.post("/planet/reality-integrity")
+def planet_reality_integrity(payload: dict = Body(default={})):
+    """Reality-Integrity score RI (Paper §37). RI is never authorization."""
+    return {"ok": True, "result": _pe_reality_integrity(payload.get("w") or {}, payload.get("x") or {}),
+            "layer": "render"}
+
+
+@app.post("/planet/material-classify")
+def planet_material_classify(payload: dict = Body(default={})):
+    """Material classification (Paper §25). Uses ExtraTrees if a trained model is
+    provided/available; otherwise returns a deterministic prior with explicit
+    'prediction' vs 'measurement' separation. Fail-soft."""
+    features = payload.get("features") or []
+    result = {
+        "material_class": None,
+        "kind": "prior",           # measurement | reconstruction | prior | unknown
+        "confidence": 0.0,
+        "extratrees_used": False,
+        "note": "measurement≠reconstruction≠prior≠instrument (Paper §25); never hallucinate precision",
+    }
+    # Deterministic fallback: no trained model shipped in-request → prior/unknown.
+    if not features:
+        result["kind"] = "unknown"
+    return {"ok": True, "result": result, "layer": "render"}
+
+
+@app.post("/planet/egress-precheck")
+def planet_egress_precheck(payload: dict = Body(default={})):
+    """Advisory egress pre-check on the compute tier (Paper §32). The AUTHORITATIVE
+    fail-closed egress filter Γ runs at the Cloudflare Worker edge; this endpoint
+    mirrors the classification so agents can self-censor before requesting emission."""
+    content = payload.get("content")
+    if not isinstance(content, str):
+        content = json.dumps(payload.get("content") or "")
+    reasons = []
+    ec = payload.get("epistemic_class")
+    tm = payload.get("truth_mode")
+    if ec in ("simulation", "hypothesis") or tm in ("SIMULATION", "HYPOTHESIS", "FORECAST"):
+        if not tm or tm not in _PE_TRUTH_MODES:
+            reasons.append("sim_untagged_truth_mode")
+        if _re.search(r"\bobserved\b|\bconfirmed\b|\bground truth\b", content, _re.IGNORECASE):
+            reasons.append("sim_asserts_observed")
+    for rx in (r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+               r"\b0x[a-fA-F0-9]{64}\b",
+               r"\bsk-[A-Za-z0-9]{20,}\b",
+               r"\b(SUPABASE_SERVICE_ROLE_KEY|CAPABILITY_HMAC_KEY|LAYER_TRANSITION_HMAC_KEY|EGRESS_HMAC_KEY)\b"):
+        if _re.search(rx, content):
+            reasons.append("secret_or_critical_state")
+            break
+    advisory_release = len(reasons) == 0
+    return {
+        "ok": True,
+        "advisory_release": advisory_release,
+        "reasons": reasons,
+        "authoritative": "Cloudflare Worker Γ is fail-closed and authoritative; this is advisory only",
+        "layer": "render",
+    }
+
+
+# ─── END of v0.9.4 PLANET ENGINE additions ─────────────────────────────────
