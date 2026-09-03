@@ -1,4 +1,13 @@
 # =============================================================================
+# metastate-quantum · requirements.txt · v0.9.5 NEUROMARK SIMULATOR
+# (v0.9.5 adds no new pip packages — everything uses stdlib + existing sklearn.
+#  Documented additions per Paper XVI §18.2:
+#    · NEURO_* / MARK_* / METACOG_* / COUPLING_* / PLANET_NEURO_PARTICLES
+#      env vars read via os.environ (stdlib) — no new package
+#    · Bayesian sensor fusion — uses math.log / math.exp (stdlib)
+#    · SENTINEL 5-gate — uses hmac + hashlib + json (stdlib)
+#    · ExtraTrees reused from v0.9.4 sklearn>=1.3,<2.0 pin below)
+# ─────────────────────────────────────────────────────────────────────────
 # metastate-quantum · requirements.txt · v0.9.3 EMOJI MACHINE CODE
 # Full drop-in file (not a patch)
 # =============================================================================
@@ -220,27 +229,3 @@ joblib>=1.3,<2.0
 # V10_T_ENABLED=false / V10_E_ENABLED=false / LAYER_STATE_HMAC_ENABLED=false
 # individually or in combination. V10 and V10-U remain enforced architecturally
 # regardless.
-
-# ═══════════════════════════════════════════════════════════════════════════
-# v0.9.4 · PLANET ENGINE (Reality-State revision)
-# ═══════════════════════════════════════════════════════════════════════════
-# NO NEW PIP PACKAGES ARE REQUIRED for Planet Engine.
-#
-# The Planet Engine compute tier (app.py §§ /planet/*) uses only packages
-# already declared above:
-#   · ExtraTrees material/threat classifiers  → scikit-learn (declared above)
-#   · physics-consistency, threat, ρ, monotonicity math → Python stdlib `math`
-#   · anti-deepfake / cross-modal aggregation  → Python stdlib only
-#   · regex egress pre-check                    → Python stdlib `re`
-#   · hashing / hmac for receipts               → Python stdlib hashlib/hmac
-#
-# ExtraTreesClassifier ships inside scikit-learn (sklearn.ensemble), so the
-# existing `scikit-learn>=1.3,<2.0` pin already provides it. If scikit-learn is
-# somehow unavailable at runtime, the Planet material-classify endpoint degrades
-# fail-soft to deterministic prior/unknown output (never raising), so the tier
-# stays live either way.
-#
-# The Reality-State world-model durable audit tables live in a new Supabase
-# schema `chainstate_census` (see chainstate_census_schema.sql). These are
-# DDL-only; supabase writes are performed by the Cloudflare Worker, so no new
-# Python client package is introduced by v0.9.4.

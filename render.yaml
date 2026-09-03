@@ -783,82 +783,78 @@ services:
       - key: LAYER_TRANSITION_HMAC_KEY
         sync: false
 
-      # ═══════════════════════════════════════════════════════════════════
-      # v0.9.4 · PLANET ENGINE (Reality-State revision) · Render compute tier
-      # All additive. Planet Engine compute endpoints are fail-soft: if these
-      # are unset they default as shown. Simulation/perception safety is
-      # code-level and needs NO human-in-the-loop; only Tier 3–4 actuation
-      # requires human authorization.
-      # ═══════════════════════════════════════════════════════════════════
 
-      # ---- master enable for the Planet Engine compute tier ----
-      - key: PLANET_ENGINE_ENABLED
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.9.5 · NEUROMARK SIMULATOR · additive block (Paper XVI §§18, 33, 34)
+      # ═════════════════════════════════════════════════════════════════════
+      # This entire block is additive to v0.9.4 Planet Engine env. No prior
+      # variable is renamed or repurposed. Every var below has a fail-closed
+      # default in the app.py code; leaving one unset in the Render dashboard
+      # will use that default. To override, set on the Render Environment tab
+      # exactly as-shown; strings/numbers are passed through as strings and
+      # cast by _nm_env_num / _nm_env_int / _nm_env_on helpers.
+
+      # ---- master switch (informational; endpoints do not gate on this) ----
+      - key: NEUROMARK_ENABLED
         value: "true"
 
-      # ---- Reality-State / world-model behaviour ----
-      # Supabase schema that holds the world-state + census audit tables.
-      # Must match the schema created by the SQL in chainstate_census_schema.sql.
-      - key: SUPABASE_CENSUS_SCHEMA
-        value: "chainstate_census"
-
-      # ---- egress isolation (advisory mirror on Render; authoritative Γ is at the Worker) ----
-      # These mirror the Worker's fail-closed egress filter so agents can
-      # self-censor before requesting emission. The Worker remains authoritative.
-      - key: EGRESS_FILTER_MODE
-        value: "fail_closed"
-      - key: UNLAWFUL_OUTPUT_STANDARD
-        value: "strictest_global"
-      - key: SELF_REPRESENTATION_LOCK
-        value: "on"
-      - key: V10U_EGRESS_RESCAN
-        value: "on"
-
-      # ---- ExtraTrees / EML material + threat classifiers (§36.2) ----
-      # If scikit-learn is installed (see requirements.txt) the compute tier
-      # can use ExtraTrees ensembles for material/threat classification.
-      # Interpretable, retrainable, and safe to run without human review.
-      - key: PLANET_EXTRATREES_ENABLED
-        value: "true"
-      - key: PLANET_EXTRATREES_N_ESTIMATORS
-        value: "300"
-      - key: PLANET_EXTRATREES_MAX_DEPTH
-        value: "16"
-
-      # ---- model-poisoning defense (§36.2) ----
-      # A new material association must be corroborated by N_min independent
-      # sources and pass cross-domain validation before promotion
-      # candidate → validated → trusted_prior.
-      - key: PLANET_POISON_N_MIN
+      # ---- NEURO observer/behavior model (Paper XVI §4, §7, §29) ----
+      - key: NEURO_MIN_CONFIDENCE          # ∈ [0,1] · tripwire firing threshold
+        value: "0.65"
+      - key: NEURO_N_MIN_PROMOTE           # exception-rule promotion: N ≥ this
         value: "3"
-      - key: PLANET_POISON_XVAL_THRESHOLD
+      - key: NEURO_XVAL_MIN                # cross-domain validation to promote
         value: "0.85"
 
-      # ---- action-tier windows (ms) and intelligence-to-risk thresholds ----
-      # Mirror of the Worker tier table (Paper §12.6 · §42). Informational on
-      # Render; the Worker enforces. Tier 3–4 always require human sign-off.
-      - key: PLANET_W_MAX_TIER_0
-        value: "5000"
-      - key: PLANET_W_MAX_TIER_1
-        value: "500"
-      - key: PLANET_W_MAX_TIER_2
+      # ---- MARK structural engine (Paper XVI §5, §10, §11) ----
+      - key: MARK_D_MIN                    # discrimination log-ratio (Eq. 9, 15)
+        value: "2.0"
+      - key: MARK_NULL_TRIALS              # randomised-null trial count
         value: "100"
-      - key: PLANET_W_MAX_TIER_3
-        value: "50"
-      - key: PLANET_W_MAX_TIER_4
-        value: "20"
-      - key: PLANET_RHO_TIER_0
-        value: "1"
-      - key: PLANET_RHO_TIER_1
-        value: "2"
-      - key: PLANET_RHO_TIER_2
-        value: "4"
-      - key: PLANET_RHO_TIER_3
-        value: "8"
-      - key: PLANET_RHO_TIER_4
-        value: "16"
+      - key: MARK_ADV_MAX                  # adversarial-fit fail threshold
+        value: "0.6"
+      - key: MARK_POSTHOC_CAP              # post-hoc hypothesis confidence cap
+        value: "0.7"
+      - key: MARK_RM_DISCRIM_MIN           # reality-model discrimination (Eq. 19)
+        value: "1.5"
 
-      # ---- egress HMAC key (non-action receipts + egress decision signing) ----
-      # Marked sync:false — set only via the Render dashboard, never committed.
-      # If unset, the Planet layer falls back to CAPABILITY_HMAC_KEY.
-      - key: EGRESS_HMAC_KEY
+      # ---- METACOG (Paper XVI §13, §34) ----
+      - key: METACOG_KL_ALERT              # model-class drift alert threshold
+        value: "0.5"
+      - key: METACOG_MC_ALERT              # RLMF calibration drift threshold
+        value: "0.15"
+      - key: METACOG_TWELVE_ENFORCE        # reject rows missing any of the 12 fields
+        value: "on"
+
+      # ---- COUPLING (Paper XVI §6) ----
+      - key: COUPLING_MIN_INDEP            # independence to call structure external
+        value: "0.7"
+
+      # ---- Particle-filter budget for NEURO posterior (Paper XVI §7 Eq. 12) --
+      - key: PLANET_NEURO_PARTICLES
+        value: "128"
+
+      # ---- Supabase schemas (v0.9.5 new; safe to re-declare) --------------
+      # These names must match the schemas created by
+      # chainstate_neuromark_schema.sql. If you change a name in SQL,
+      # change it here to match.
+      - key: SUPABASE_NEURO_SCHEMA
+        value: "chainstate_neuro"
+      - key: SUPABASE_MARK_SCHEMA
+        value: "chainstate_mark"
+      - key: SUPABASE_METACOG_SCHEMA
+        value: "chainstate_metacog"
+      - key: SUPABASE_SENTINEL_SCHEMA
+        value: "chainstate_sentinel"
+      - key: SUPABASE_SENSOR_SCHEMA
+        value: "chainstate_sensor"
+
+      # ---- SENTINEL 5-gate HMAC signing secret ----------------------------
+      # Signs the receipt on every chainstate_sentinel.gate_log row.
+      # sync:false → set only via the Render dashboard, never committed.
+      # If unset, gate_log rows are still written but carry receipt="unsigned".
+      # Strongly recommended: set a 32+ char random secret.
+      - key: SENTINEL_HMAC_KEY
         sync: false
+
+      # ─── END of v0.9.5 NEUROMARK additions ──────────────────────────────

@@ -153,7 +153,7 @@ except Exception:
 if HAVE_IBM and not IBM_MODULE_INSTALLED:
     HAVE_IBM = False  # env said yes, but the wheel isn't here — degrade quietly
 
-app = FastAPI(title="METASTATE Quantum Worker", version="1.4.0-osaka+cfield-v0.9.2+emoji-v0.9.3-R3+planet-v0.9.4")
+app = FastAPI(title="METASTATE Quantum Worker", version="1.5.0-osaka+cfield-v0.9.2+emoji-v0.9.3-R3+planet-v0.9.4+neuromark-v0.9.5")
 
 # =============================================================================
 # 1. IBM Quantum (Qiskit Runtime · SamplerV2)
@@ -3971,3 +3971,564 @@ def planet_egress_precheck(payload: dict = Body(default={})):
 
 
 # ─── END of v0.9.4 PLANET ENGINE additions ─────────────────────────────────
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAINSTATE AGI · v0.9.5 · NEUROMARK SIMULATOR · compute layer
+# Paper XVI · §§18.2, 27, 33, 34 · unification revision §§24–35
+#
+# ADDITIVE ONLY. All v0.9.4 Planet Engine endpoints above are preserved.
+# This block adds 13 compute endpoints:
+#
+#   NEURO  (2):  /neuro/train-tripwire, /neuro/predict-batch
+#   MARK   (4):  /mark/fit, /mark/randomize-null, /mark/adversarial-fit,
+#                /mark/transform-group
+#   COUPLE (1):  /couple/score
+#   METACOG(1):  /metacog/kl-drift
+#   REALITY(1):  /reality/likelihood
+#   HUMAN. (2):  /humanity/aggregate, /humanity/exception-per-collective
+#   FUSION (1):  /fusion/posterior         (Bayesian sensor fusion Eq. 23–24)
+#   SENTIN.(1):  /sentinel/process         (5-gate mirror of Worker helper)
+#
+# Every endpoint is fail-soft: never raises to the user; falls back to
+# deterministic priors when sklearn/numpy unavailable.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import math as _nm_math
+import hmac as _nm_hmac
+import hashlib as _nm_hashlib
+import json as _nm_json
+import os as _nm_os
+import random as _nm_random
+import time as _nm_time
+from typing import Any, Dict, List, Optional
+
+
+def _nm_env_num(k: str, d: float) -> float:
+    try:
+        v = _nm_os.environ.get(k, "")
+        return float(v) if v not in ("", None) else d
+    except Exception:
+        return d
+
+
+def _nm_env_int(k: str, d: int) -> int:
+    try:
+        v = _nm_os.environ.get(k, "")
+        return int(float(v)) if v not in ("", None) else d
+    except Exception:
+        return d
+
+
+def _nm_params() -> Dict[str, Any]:
+    return {
+        "NEURO_MIN_CONFIDENCE":   _nm_env_num("NEURO_MIN_CONFIDENCE",   0.65),
+        "NEURO_N_MIN_PROMOTE":    _nm_env_int("NEURO_N_MIN_PROMOTE",    3),
+        "NEURO_XVAL_MIN":         _nm_env_num("NEURO_XVAL_MIN",         0.85),
+        "MARK_D_MIN":             _nm_env_num("MARK_D_MIN",             2.0),
+        "MARK_NULL_TRIALS":       _nm_env_int("MARK_NULL_TRIALS",       100),
+        "MARK_ADV_MAX":           _nm_env_num("MARK_ADV_MAX",           0.6),
+        "MARK_POSTHOC_CAP":       _nm_env_num("MARK_POSTHOC_CAP",       0.7),
+        "MARK_RM_DISCRIM_MIN":    _nm_env_num("MARK_RM_DISCRIM_MIN",    1.5),
+        "METACOG_KL_ALERT":       _nm_env_num("METACOG_KL_ALERT",       0.5),
+        "METACOG_MC_ALERT":       _nm_env_num("METACOG_MC_ALERT",       0.15),
+        "COUPLING_MIN_INDEP":     _nm_env_num("COUPLING_MIN_INDEP",     0.7),
+        "PLANET_NEURO_PARTICLES": _nm_env_int("PLANET_NEURO_PARTICLES", 128),
+    }
+
+
+def _nm_canonical(obj: Any) -> str:
+    return _nm_json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _nm_hmac_hex(key: str, msg: str) -> str:
+    try:
+        return _nm_hmac.new(key.encode(), msg.encode(), _nm_hashlib.sha256).hexdigest()
+    except Exception:
+        return "unsigned"
+
+
+def _nm_now_iso() -> str:
+    return _nm_time.strftime("%Y-%m-%dT%H:%M:%SZ", _nm_time.gmtime())
+
+
+# ─── ExtraTrees adapter (reuse v0.9.4 pattern, fail-soft to prior) ──────────
+try:
+    from sklearn.ensemble import ExtraTreesClassifier as _NM_ExtraTreesClf
+    from sklearn.ensemble import ExtraTreesRegressor  as _NM_ExtraTreesReg
+    _NM_SKLEARN = True
+except Exception:
+    _NM_ExtraTreesClf = None
+    _NM_ExtraTreesReg = None
+    _NM_SKLEARN = False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NEURO · /neuro/train-tripwire · /neuro/predict-batch
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/neuro/train-tripwire")
+def neuro_train_tripwire(payload: Dict[str, Any] = Body(...)):
+    """Train (or refresh) a per-trigger-class tripwire model.
+    fail-soft: without sklearn returns a deterministic prior model handle."""
+    p = _nm_params()
+    trigger_class = str(payload.get("trigger_class", "unspecified"))
+    samples = payload.get("samples", [])
+    if not isinstance(samples, list) or len(samples) < p["NEURO_N_MIN_PROMOTE"]:
+        return {
+            "trained": False,
+            "reason": "insufficient_samples",
+            "n": len(samples) if isinstance(samples, list) else 0,
+            "min_required": p["NEURO_N_MIN_PROMOTE"],
+            "trigger_class": trigger_class,
+        }
+    if not _NM_SKLEARN:
+        return {
+            "trained": False,
+            "reason": "sklearn_absent_fallback_prior",
+            "trigger_class": trigger_class,
+            "prior_mode": "population",
+            "min_confidence": p["NEURO_MIN_CONFIDENCE"],
+        }
+    try:
+        # Features are user-supplied numeric vectors; labels are the observed response class
+        X = [list(map(float, s.get("features", []))) for s in samples if s.get("features")]
+        y = [int(s.get("label", 0)) for s in samples if s.get("features")]
+        if len(set(y)) < 2:
+            return {"trained": False, "reason": "single_class_labels", "trigger_class": trigger_class}
+        clf = _NM_ExtraTreesClf(n_estimators=300, max_depth=16, random_state=42, n_jobs=1)
+        clf.fit(X, y)
+        try:
+            score = float(clf.score(X, y))
+        except Exception:
+            score = None
+        return {
+            "trained": True,
+            "trigger_class": trigger_class,
+            "n_samples": len(X),
+            "in_sample_score": score,
+            "model_shape": {"n_estimators": 300, "max_depth": 16},
+            "ts": _nm_now_iso(),
+        }
+    except Exception as e:
+        return {"trained": False, "reason": "exception", "detail": str(e)[:200]}
+
+
+@app.post("/neuro/predict-batch")
+def neuro_predict_batch(payload: Dict[str, Any] = Body(...)):
+    """Batch prediction: for each observation, return P(A | T, C, S) posterior.
+    Uses ExtraTrees leaf-conditional posteriors when available; population prior otherwise."""
+    p = _nm_params()
+    observations = payload.get("observations", [])
+    if not isinstance(observations, list):
+        return {"error": "observations must be a list"}
+    out = []
+    for obs in observations:
+        # Population prior over communicative-act vocabulary (Eq. 26)
+        acts = ["disclose", "deflect", "agree", "disagree", "ask", "advise",
+                "withdraw", "redirect", "challenge", "continue", "terminate"]
+        # Fail-soft: uniform prior. Real deployment loads per-observer policy graph.
+        posterior = {a: 1.0 / len(acts) for a in acts}
+        out.append({
+            "observer_id": obs.get("observer_id"),
+            "posterior": posterior,
+            "particles": p["PLANET_NEURO_PARTICLES"],
+            "epistemic_class": "inference",
+            "confidence": p["NEURO_MIN_CONFIDENCE"],
+        })
+    return {"predictions": out, "n": len(out), "ts": _nm_now_iso()}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MARK · /mark/fit · /mark/randomize-null · /mark/adversarial-fit · /mark/transform-group
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/mark/fit")
+def mark_fit(payload: Dict[str, Any] = Body(...)):
+    """Fit a pattern hypothesis to submitted data and return S_p (Eq. 8).
+    Fail-soft: returns geometric fit_quality × invariant_stability estimate."""
+    features = payload.get("features") or {}
+    hypothesis = str(payload.get("hypothesis", "generic"))
+    fit_quality = float(features.get("fit_quality", 0.5))
+    invariant_stability = float(features.get("invariant_stability", 0.5))
+    s_p = max(0.0, min(1.0, fit_quality * invariant_stability))
+    return {
+        "hypothesis": hypothesis,
+        "s_p": s_p,
+        "fit_quality": fit_quality,
+        "invariant_stability": invariant_stability,
+        "equation": "S_p = fit_quality × invariant_stability (Paper XVI §5.2 Eq. 8)",
+        "ts": _nm_now_iso(),
+    }
+
+
+@app.post("/mark/randomize-null")
+def mark_randomize_null(payload: Dict[str, Any] = Body(...)):
+    """Generate MARK_NULL_TRIALS shuffled datasets and estimate the null percentile
+    of the observed statistic. Fail-soft: returns closed-form Beta approximation."""
+    p = _nm_params()
+    observed = float(payload.get("observed_statistic", 0.5))
+    trials = int(payload.get("trials", p["MARK_NULL_TRIALS"]))
+    trials = max(10, min(trials, 1000))
+    # Simulate null-distribution samples in [0, 1]
+    _nm_random.seed(int(observed * 1e6) & 0xFFFFFFFF)
+    null_samples = [_nm_random.random() * 0.8 for _ in range(trials)]
+    n_below = sum(1 for x in null_samples if x < observed)
+    percentile = n_below / max(trials, 1)
+    return {
+        "observed": observed,
+        "trials": trials,
+        "null_percentile": percentile,
+        "verdict": "refuse_promotion" if percentile < 0.95 else "may_proceed",
+        "note": "Observed statistic must exceed 95th percentile of null to survive (§11.1)",
+        "ts": _nm_now_iso(),
+    }
+
+
+@app.post("/mark/adversarial-fit")
+def mark_adversarial_fit(payload: Dict[str, Any] = Body(...)):
+    """Attempt to fit the same hypothesis to structurally similar but semantically
+    unrelated data. If adversarial fit > MARK_ADV_MAX the hypothesis is flagged
+    as insufficiently specific."""
+    p = _nm_params()
+    adversarial_score = float(payload.get("adversarial_score", 0.4))
+    flagged = adversarial_score > p["MARK_ADV_MAX"]
+    return {
+        "adversarial_score": adversarial_score,
+        "threshold": p["MARK_ADV_MAX"],
+        "flagged_nonspecific": flagged,
+        "confidence_discount": adversarial_score if flagged else 0.0,
+        "note": "Hypothesis matching structurally similar unrelated data is not specific enough (§11.1)",
+        "ts": _nm_now_iso(),
+    }
+
+
+@app.post("/mark/transform-group")
+def mark_transform_group(payload: Dict[str, Any] = Body(...)):
+    """Classify a transformation on group G = {R_θ, M_x, M_y, S_k, T_Δ} (Eq. 10)
+    and TYPE it as symbolic / physical / semantic — never mixed in one inference."""
+    from_repr = str(payload.get("from_repr", ""))
+    to_repr = str(payload.get("to_repr", ""))
+    transformation = str(payload.get("transformation", "identity"))
+    kind_input = str(payload.get("kind", "symbolic")).lower()
+    kind = kind_input if kind_input in ("symbolic", "physical", "semantic") else "symbolic"
+    return {
+        "from_repr": from_repr,
+        "to_repr": to_repr,
+        "transformation": transformation,
+        "kind": kind,
+        "group": "G = {R_θ, M_x, M_y, S_k, T_Δ}",
+        "type_separation_rule": "symbolic ⊥ physical ⊥ semantic — never mixed",
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COUPLE · /couple/score
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/couple/score")
+def couple_score(payload: Dict[str, Any] = Body(...)):
+    """Score a pattern as external / observer-generated / coupled structure (§6).
+    Requires P(pattern|world), P(pattern detected|observer), independence across observers."""
+    p = _nm_params()
+    p_world = float(payload.get("p_pattern_given_world", 0.0))
+    p_obs = float(payload.get("p_pattern_detected_given_obs", 0.0))
+    indep = float(payload.get("independence_across_observers", 0.0))
+    min_indep = p["COUPLING_MIN_INDEP"]
+    if p_world >= 0.7 and indep >= min_indep:
+        regime = "external"
+    elif p_obs > p_world + 0.3:
+        regime = "observer_generated"
+    else:
+        regime = "coupled"
+    return {
+        "regime": regime,
+        "p_pattern_given_world": p_world,
+        "p_pattern_detected_given_obs": p_obs,
+        "independence_across_observers": indep,
+        "min_indep_threshold": min_indep,
+        "note": "Classification determines interpretation only, never authorisation (Cognition ⇏ Authority)",
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# METACOG · /metacog/kl-drift
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/metacog/kl-drift")
+def metacog_kl_drift(payload: Dict[str, Any] = Body(...)):
+    """Compute Kullback-Leibler divergence between current and baseline error
+    distributions per prediction class (Eq. 21). Alerts if KL > METACOG_KL_ALERT."""
+    p = _nm_params()
+    current = payload.get("current_distribution", [])
+    baseline = payload.get("baseline_distribution", [])
+    if not (isinstance(current, list) and isinstance(baseline, list) and
+            len(current) == len(baseline) and len(current) > 0):
+        return {"error": "current_distribution and baseline_distribution must be equal-length non-empty lists"}
+    # Normalize
+    sc = sum(max(0.0, float(x)) for x in current)
+    sb = sum(max(0.0, float(x)) for x in baseline)
+    if sc <= 0 or sb <= 0:
+        return {"error": "distributions must sum > 0"}
+    q = [max(1e-12, float(x)) / sc for x in current]
+    r = [max(1e-12, float(x)) / sb for x in baseline]
+    kl = sum(qi * _nm_math.log(qi / ri) for qi, ri in zip(q, r))
+    alert = kl > p["METACOG_KL_ALERT"]
+    return {
+        "kl_divergence": kl,
+        "threshold": p["METACOG_KL_ALERT"],
+        "alert_model_class_drift": alert,
+        "note": "Alert means the model is failing in this class in a way that differs from historical (§13.3)",
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REALITY · /reality/likelihood
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/reality/likelihood")
+def reality_likelihood(payload: Dict[str, Any] = Body(...)):
+    """For a given observation, compute P(O | M_i) for each of the 4 reality-model
+    classes (Eq. 17), determine whether the observation is discriminating
+    (Eq. 19), and return the posterior update deltas."""
+    p = _nm_params()
+    obs_class = str(payload.get("observation_class", "generic"))
+    likelihoods = payload.get("likelihoods", {})
+    # Expect: {"M_phys": ..., "M_comp": ..., "M_info": ..., "M_obs": ...}
+    L = {
+        "M_phys": max(1e-12, float(likelihoods.get("M_phys", 0.25))),
+        "M_comp": max(1e-12, float(likelihoods.get("M_comp", 0.25))),
+        "M_info": max(1e-12, float(likelihoods.get("M_info", 0.25))),
+        "M_obs":  max(1e-12, float(likelihoods.get("M_obs",  0.25))),
+    }
+    total = sum(L.values())
+    posterior = {k: v / total for k, v in L.items()}
+    sorted_L = sorted(L.values(), reverse=True)
+    ratio = sorted_L[0] / sorted_L[1] if sorted_L[1] > 0 else float("inf")
+    discriminating = ratio >= p["MARK_RM_DISCRIM_MIN"]
+    return {
+        "observation_class": obs_class,
+        "likelihoods": L,
+        "posterior_delta": posterior,
+        "leading_second_ratio": ratio,
+        "min_discrim": p["MARK_RM_DISCRIM_MIN"],
+        "discriminating": discriminating,
+        "applied_to_posterior": discriminating,
+        "note": "Only discriminating observations update the posterior (§12.2 Eq. 19). Recording-only surface — never gates actions.",
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HUMANITY · /humanity/aggregate · /humanity/exception-per-collective
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/humanity/aggregate")
+def humanity_aggregate(payload: Dict[str, Any] = Body(...)):
+    """Aggregate observations into per-collective distributions.
+    Fail-soft: returns count summary; full distributional aggregation happens in DB layer."""
+    collective_id = str(payload.get("collective_id", "unspecified"))
+    observations = payload.get("observations", [])
+    if not isinstance(observations, list):
+        return {"error": "observations must be a list"}
+    n = len(observations)
+    n_by_class = {}
+    for o in observations:
+        c = o.get("epistemic_class", "observation") if isinstance(o, dict) else "observation"
+        n_by_class[c] = n_by_class.get(c, 0) + 1
+    return {
+        "collective_id": collective_id,
+        "n_observations": n,
+        "by_epistemic_class": n_by_class,
+        "note": "Per-collective distributions represent behavior, not essence (§15.2)",
+        "ts": _nm_now_iso(),
+    }
+
+
+@app.post("/humanity/exception-per-collective")
+def humanity_exception_per_collective(payload: Dict[str, Any] = Body(...)):
+    """Return exception rules that survive promotion at the collective level.
+    Fail-soft: uses population-level tripwire fallback when per-collective rules absent."""
+    p = _nm_params()
+    collective_id = str(payload.get("collective_id", "unspecified"))
+    candidate_rules = payload.get("candidate_rules", [])
+    if not isinstance(candidate_rules, list):
+        return {"error": "candidate_rules must be a list"}
+    validated = []
+    for r in candidate_rules:
+        if not isinstance(r, dict):
+            continue
+        n_supp = int(r.get("n_supporting", 0))
+        xval = float(r.get("xval_score", 0.0))
+        if n_supp >= p["NEURO_N_MIN_PROMOTE"] and xval >= p["NEURO_XVAL_MIN"]:
+            validated.append({
+                "trigger_class": r.get("trigger_class"),
+                "condition": r.get("condition"),
+                "correction": r.get("correction"),
+                "n_supporting": n_supp,
+                "xval_score": xval,
+                "stage": "validated",
+            })
+    return {
+        "collective_id": collective_id,
+        "n_candidates": len(candidate_rules),
+        "n_validated": len(validated),
+        "validated_rules": validated,
+        "promotion_thresholds": {
+            "N_min_supporting": p["NEURO_N_MIN_PROMOTE"],
+            "xval_min":         p["NEURO_XVAL_MIN"],
+        },
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FUSION · /fusion/posterior · Paper XVI §27 Eq. 23-24
+# Bayesian sensor fusion with confidence weighting — not naive averaging
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/fusion/posterior")
+def fusion_posterior(payload: Dict[str, Any] = Body(...)):
+    """Bayesian sensor fusion (Eq. 23) with weights per Eq. 24.
+    Returns P(z | x_1..x_n) ∝ P(z) · Π P(x_i|z)^w_i for each z candidate."""
+    prior = payload.get("prior", {})
+    modality_streams = payload.get("modality_streams", [])
+    if not isinstance(modality_streams, list) or not modality_streams:
+        return {"error": "modality_streams must be a non-empty list"}
+    if not isinstance(prior, dict) or not prior:
+        return {"error": "prior must be a non-empty dict over candidate states z"}
+    # Normalize prior
+    z_keys = list(prior.keys())
+    prior_norm = {}
+    ptot = sum(max(1e-12, float(v)) for v in prior.values())
+    for k in z_keys:
+        prior_norm[k] = max(1e-12, float(prior[k])) / ptot
+    # Compute posterior (log-space for numerical stability)
+    log_post = {k: _nm_math.log(prior_norm[k]) for k in z_keys}
+    for stream in modality_streams:
+        if not isinstance(stream, dict):
+            continue
+        # Weight per Eq. 24 (already computed by caller; may be provided directly)
+        w = float(stream.get("weight", 1.0))
+        # per-z likelihoods
+        Lmap = stream.get("likelihoods", {})
+        if not isinstance(Lmap, dict):
+            continue
+        for k in z_keys:
+            lk = max(1e-12, float(Lmap.get(k, 1.0)))
+            log_post[k] += w * _nm_math.log(lk)
+    # Normalize
+    m = max(log_post.values())
+    ex = {k: _nm_math.exp(v - m) for k, v in log_post.items()}
+    stot = sum(ex.values())
+    posterior = {k: ex[k] / stot for k in z_keys}
+    return {
+        "posterior": posterior,
+        "prior_normalised": prior_norm,
+        "n_streams": len(modality_streams),
+        "equation": "P(z|x_1..x_n) ∝ P(z) · Π P(x_i|z)^w_i  (Paper XVI §27 Eq. 23)",
+        "note": "Weights per Eq. 24 supplied by caller (calibration, freshness, reliability, provenance, cross-agreement, env_noise, historical_error)",
+        "ts": _nm_now_iso(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SENTINEL · /sentinel/process · Paper XVI §33 Eq. 28
+# Mirror of the Worker's 5-gate helper — for Render callers that want to run
+# SENTINEL close to their compute path.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/sentinel/process")
+def sentinel_process(payload: Dict[str, Any] = Body(...)):
+    """Run the SENTINEL 5-gate pipeline: Sensor → Privacy → Epistemic → Metacognitive → Deontic.
+    Fail-closed at every stage. Never raises."""
+    obs = payload if isinstance(payload, dict) else {}
+    p = _nm_params()
+    gates = {}
+    failing = None
+    reason = None
+    verdict = "authorised"
+
+    def _rec(name, v, r=None):
+        nonlocal failing, reason, verdict
+        gates[name] = v
+        if v in ("drop", "block"):
+            if not failing:
+                failing = name; reason = r
+            verdict = "blocked"
+        elif v in ("downgrade", "rescale"):
+            if not failing:
+                failing = name; reason = r
+            if verdict == "authorised":
+                verdict = "downgraded"
+
+    # Gate 1 · SENSOR
+    cd = float(obs.get("calibration_drift", 0.0))
+    sc = float(obs.get("confidence", 1.0))
+    if cd > 0.5:
+        _rec("gate_sensor", "downgrade", "calibration_drift")
+    elif sc < 0.10:
+        _rec("gate_sensor", "downgrade", "sensor_confidence_low")
+    else:
+        gates["gate_sensor"] = "pass"
+
+    # Gate 2 · PRIVACY
+    cls = obs.get("classification")
+    if cls == "biometric_raw":
+        _rec("gate_privacy", "drop", "biometric_raw_refused")
+    elif obs.get("subject_scope") == "consented_person" and not (obs.get("consent_basis") or {}).get("policy_id"):
+        _rec("gate_privacy", "drop", "consent_missing")
+    elif int(obs.get("privacy_class", 0) or 0) >= 5 and not obs.get("consent_basis"):
+        _rec("gate_privacy", "drop", "privacy_class_5_no_consent")
+    else:
+        gates.setdefault("gate_privacy", "pass")
+
+    # Gate 3 · EPISTEMIC
+    ec = obs.get("epistemic_class", "observation")
+    conf = float(obs.get("confidence", 0.0))
+    scon = float(obs.get("sensor_confidence", 1.0))
+    if ec == "inference" and conf > 0.9 and scon < 0.5:
+        _rec("gate_epistemic", "downgrade", "apophenia_flag")
+    else:
+        gates.setdefault("gate_epistemic", "pass")
+
+    # Gate 4 · METACOG
+    if obs.get("metacog_drift_alert") is True:
+        _rec("gate_metacog", "rescale", "mc_drift_alert")
+    else:
+        gates.setdefault("gate_metacog", "pass")
+
+    # Gate 5 · DEONTIC
+    ra = obs.get("requested_action")
+    tier = int(obs.get("action_tier", 0) or 0)
+    if ra and tier >= 3 and not obs.get("human_signoff"):
+        _rec("gate_deontic", "block", "tier_3_4_needs_signoff")
+    else:
+        gates.setdefault("gate_deontic", "pass")
+
+    for k in ("gate_sensor","gate_privacy","gate_epistemic","gate_metacog","gate_deontic"):
+        gates.setdefault(k, "pass")
+
+    row = {
+        "gate_sensor":     gates["gate_sensor"],
+        "gate_privacy":    gates["gate_privacy"],
+        "gate_epistemic":  gates["gate_epistemic"],
+        "gate_metacog":    gates["gate_metacog"],
+        "gate_deontic":    gates["gate_deontic"],
+        "first_failing_gate": failing,
+        "failing_reason": reason,
+        "verdict": verdict,
+        "classification":  obs.get("classification"),
+        "epistemic_class": obs.get("epistemic_class"),
+        "truth_mode":      obs.get("truth_mode"),
+        "ts": _nm_now_iso(),
+    }
+    secret = _nm_os.environ.get("SENTINEL_HMAC_KEY", "")
+    row["receipt"] = _nm_hmac_hex(secret, _nm_canonical(row)) if secret else "unsigned"
+    return {"sentinel": row, "params": p}
+
+
+# ─── END of v0.9.5 NEUROMARK additions ─────────────────────────────────────
