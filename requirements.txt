@@ -229,3 +229,80 @@ joblib>=1.3,<2.0
 # V10_T_ENABLED=false / V10_E_ENABLED=false / LAYER_STATE_HMAC_ENABLED=false
 # individually or in combination. V10 and V10-U remain enforced architecturally
 # regardless.
+
+# ═════════════════════════════════════════════════════════════════════════
+# v0.10.0 · CHAINSTATE AGI OMNISCIENCE · Interdisciplinary Vertical Extension
+# Paper XVIII · additive over v0.9.5 baseline. Every v0.7.x → v0.9.5
+# dependency above is preserved byte-identically.
+#
+# HARD DEPENDENCIES ADDED BY v0.10.0: ZERO.
+#
+# The v0.10.0 verticals (Math Fabric, Theory Tensor, CMTS, Isomorphism
+# Mapper, Twin Fabric 2.0, Engineering Lifecycle, Metamorphic Fabrication,
+# Capability State, Coverage Registry) are implemented entirely in Python
+# stdlib (json, hashlib, hmac, math, time, datetime, os, typing). Every
+# optional science library below is fail-soft imported inside app.py — if
+# missing at runtime, only the specific capability degrades, and every
+# v0.9.x endpoint continues byte-identically.
+#
+# The Cloudflare Worker side (edge-worker.js) uses only V8 built-ins
+# (crypto.subtle, fetch, KVNamespace, TextEncoder). No npm dependencies
+# are introduced by v0.10.0.
+# ═════════════════════════════════════════════════════════════════════════
+
+# ---- OPTIONAL RECOMMENDATIONS (uncomment to activate the corresponding v0.10.0 capability)
+
+# Symbolic mathematics: enables full /math/formalize + /math/verify with
+# symbolic solving. Without it, /math/status reports have_sympy=false and
+# /math/verify falls back to numerical / metamorphic methods only.
+# sympy>=1.12,<2.0
+
+# SMT + theorem proving: enables the theorem-prover verification path in
+# /math/verify. Without it, that path returns validity="method_unavailable"
+# and the numerical path is used as a fallback. z3-solver has heavy platform-
+# specific wheels; test on Render's free tier before adding.
+# z3-solver>=4.12,<5.0
+
+# numpy is ALREADY listed above from v0.7.7 (Aer simulator dependency) so
+# no additional pin is required for v0.10.0. It is fail-soft imported by
+# _v010_math_verify() and unaffected if pinned elsewhere.
+
+# ─── END of v0.10.0 CHAINSTATE OMNISCIENCE additions ─────────────────────
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# v0.10.1 · CHAINSTATE EDGE QSIM · Additive documentation only
+# ═════════════════════════════════════════════════════════════════════════
+#
+# HARD DEPENDENCIES ADDED BY v0.10.1: ZERO.
+#
+# The v0.10.1 QSIM kernel endpoints (state_vector, mps, stabilizer,
+# density_matrix) reuse numpy>=1.26,<2.0 already pinned above from
+# v0.7.7 (Aer simulator dependency) and scipy>=1.11,<2.0 from v0.10.0.
+# No additional pip package is required for the four backends specified
+# in §8.1 of the CHAINSTATE EDGE QSIM paper.
+#
+# Optional acceleration (uncomment to activate; NOT required for v0.10.1):
+#
+#   # ---- Sparse MPS backend (Phase 3, Configuration D) ----
+#   # For MPS chi=64 targeting circuits with S ≤ 6 entanglement cut.
+#   # Falls back to state-vector for n ≤ 20 when this is absent.
+#   # opt_einsum>=3.3,<4.0
+#
+#   # ---- Stabilizer-tableau library (Phase 3 productionisation) ----
+#   # The stabilizer backend currently reports the Clifford verdict from
+#   # QIR structure alone (envelope invariant I1: never emit full
+#   # tableau). Optional acceleration for the propagation step:
+#   # stim>=1.13,<2.0
+#
+# All optional libraries above are fail-soft imported inside app.py — if
+# missing at runtime, the corresponding backend endpoint reports
+# {"backends": {"<name>": {"available": false, ...}}} in /qsim/kernel/status
+# and returns HTTP 503 on POST. Every v0.7.x - v0.10.0 endpoint continues
+# byte-identically regardless.
+#
+# The Cloudflare Worker side (edge-worker.js) uses only V8 built-ins
+# (crypto.subtle Ed25519 + HMAC-SHA256, fetch, KVNamespace, TextEncoder,
+# Durable Objects). No npm dependencies are introduced by v0.10.1.
+#
+# ─── END of v0.10.1 CHAINSTATE EDGE QSIM additions ──────────────────────

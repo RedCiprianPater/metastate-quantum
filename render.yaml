@@ -858,3 +858,193 @@ services:
         sync: false
 
       # ─── END of v0.9.5 NEUROMARK additions ──────────────────────────────
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.10.0 · CHAINSTATE AGI OMNISCIENCE · Interdisciplinary Vertical Extension
+      # Paper XVIII · additive over v0.9.5 baseline. Every v0.7.x → v0.9.5
+      # env-var above is preserved byte-identically. Every v0.10.0 subsystem
+      # ships with a single-toggle disable (SUBSYSTEM_ENABLED=false) so a
+      # missing bridge degrades to v0.9.6 behaviour without breaking anything.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- v0.10.0 subsystem enable flags (default: on) --------------------
+      - key: ONTOLOGY_ENABLED
+        value: "true"
+      - key: MATH_FABRIC_ENABLED
+        value: "true"
+      - key: THEORY_ENGINE_ENABLED
+        value: "true"
+      - key: ISOMORPHISM_ENABLED
+        value: "true"
+      - key: CMTS_ENABLED
+        value: "true"
+      - key: TWIN_FABRIC_ENABLED
+        value: "true"
+      - key: METAMORPHIC_FAB_ENABLED
+        value: "true"
+      - key: COVERAGE_REGISTRY_ENABLED
+        value: "true"
+      - key: CAPABILITY_STATE_ENABLED
+        value: "true"
+
+      # ---- Individual L0-13..17 predicate toggles (default: on) ------------
+      # Each is fail-closed. Setting any of these to "false" makes the
+      # corresponding predicate PASS unconditionally in shadow-mode; the
+      # substrate then relies on V11, V12, and L0 predicates 1-12 alone.
+      - key: L0_13_ENABLED
+        value: "true"
+      - key: L0_14_ENABLED
+        value: "true"
+      - key: L0_15_ENABLED
+        value: "true"
+      - key: L0_16_ENABLED
+        value: "true"
+      - key: L0_17_ENABLED
+        value: "true"
+
+      # ---- Supabase schema names (v0.10.0 new; safe to re-declare) ---------
+      # These names must match the schemas created by
+      # chainstate_v010_schemas.sql. If you change a name in SQL, change
+      # it here to match.
+      - key: SUPABASE_ONTOLOGY_SCHEMA
+        value: "chainstate_ontology"
+      - key: SUPABASE_SCIENCE_SCHEMA
+        value: "chainstate_science"
+      - key: SUPABASE_TWIN_SCHEMA
+        value: "chainstate_twin"
+      - key: SUPABASE_FABRICATION_SCHEMA
+        value: "chainstate_fabrication"
+      - key: SUPABASE_ENGINEERING_SCHEMA
+        value: "chainstate_engineering"
+      - key: SUPABASE_CAPABILITY_SCHEMA
+        value: "chainstate_capability"
+
+      # ---- v0.10.0 thresholds (documentation defaults; tune per deployment)
+      - key: EVIDENCE_MAX_AGE_HOURS
+        value: "72"
+      - key: CALIBRATION_TOL
+        value: "0.05"
+      - key: FAB_SAFETY_THRESHOLD
+        value: "0.5"
+      - key: FAB_MODEL_DISCREPANCY_THRESHOLD
+        value: "0.2"
+      - key: FAB_SENSOR_NOISE_THRESHOLD
+        value: "0.05"
+
+      # ---- v0.10.0 SECRETS (sync: false — set in Render Dashboard) ---------
+      # ONTOLOGY_ADMIN_KEY signs administrative FOL++ import ops. Required
+      # for POST /ontology/compose-v2 write-path bulk import.
+      - key: ONTOLOGY_ADMIN_KEY
+        sync: false
+
+      # Signs candidate-science ingest entries before promotion to the
+      # evidence graph. Required for the 06:00 UTC daily ingest tick.
+      - key: SCIENCE_INGEST_TOKEN
+        sync: false
+
+      # HMAC-verifies PDAL device manifests before any bounded fabrication
+      # adaptation. If unset, /fabrication/adapt refuses in strict mode.
+      - key: FAB_PDAL_HMAC_KEY
+        sync: false
+
+      # Signs receipts on every /math/verify result so downstream consumers
+      # can prove the result came from this substrate. If unset the receipt
+      # field is "unsigned" — verification still runs.
+      - key: MATH_VERIFY_HMAC_KEY
+        sync: false
+
+      # Admin operations on Theory Tensor (add/retire theories, override
+      # evidence weights).
+      - key: THEORY_ADMIN_KEY
+        sync: false
+
+      # Signs every cross-medium transition receipt. Consumed by
+      # /cmts/transition and the ontology_composition_tick.
+      - key: CMTS_HMAC_KEY
+        sync: false
+
+      # Signs every digital-twin validation run row (T0-T5).
+      - key: TWIN_VALIDATION_HMAC_KEY
+        sync: false
+
+      # Admin operations on isomorphism mappings (promote validated_mapping
+      # ↔ hypothesis).
+      - key: ISOMORPHISM_ADMIN_KEY
+        sync: false
+
+      # Signs both /capability/state and (separately) authority-state rows.
+      # NEVER used to grant authority — signs read-only assertions of the
+      # current internal capability vector C.
+      - key: CAPABILITY_STATE_HMAC_KEY
+        sync: false
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.10.0 · CRON DISPATCH REMINDERS
+      # (Add these entries in the Cloudflare Dashboard for the Worker, not
+      # here — Render is not the cron owner. They are documented in this
+      # file so the mapping stays discoverable in the repo.)
+      #
+      #   */9  * * * *   ontology_composition_tick   (§35 · FOL++ propagation)
+      #   0 6  * * *     science_ingest_daily        (§27 + §36 · arxiv/ADS deltas)
+      #   */13 * * * *   twin_convergence_sweep       (§42 · residuals refresh)
+      #   0 4  * * *     cosmos_mirror_refresh        (§27 · re-fetch cosmos)
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ─── END of v0.10.0 CHAINSTATE OMNISCIENCE additions ────────────────
+
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.10.1 · CHAINSTATE EDGE QSIM env vars (Rev 2026-09)
+      # Additive-only. Every v0.7.0-v0.10.0 env var above is preserved.
+      # Master rollback: QSIM_ENABLED=false disables every /qsim/kernel/* endpoint.
+      # ═════════════════════════════════════════════════════════════════════
+
+
+      # ═════════════════════════════════════════════════════════════════════
+      # v0.10.1 · CHAINSTATE EDGE QSIM env vars (Rev 2026-09)
+      # Additive-only. Every v0.7.0-v0.10.0 env var above is preserved.
+      # Master rollback: QSIM_ENABLED=false disables every /qsim/kernel/*
+      # endpoint. Grounded in "CHAINSTATE EDGE QSIM" paper.
+      # ═════════════════════════════════════════════════════════════════════
+
+      # ---- Master rollback ----
+      # QSIM_ENABLED=false disables every /qsim/kernel/* endpoint (503).
+      # Flip to "true" when the Cloudflare Worker side is ready.
+      - key: QSIM_ENABLED
+        value: "false"
+
+      # ---- Hard caps (mirrored on the Worker side; single source of truth) ----
+      - key: QSIM_MAX_QUBITS
+        value: "30"                    # state-vector n_cap ≈ 28 (Table §8.1)
+      - key: QSIM_MAX_SECONDS
+        value: "60"                    # per-job wall-clock cap
+      - key: QSIM_MAX_BYTES
+        value: "33554432"              # 32 MiB per-job output payload cap
+      - key: QSIM_INTENT_TTL_S
+        value: "30"                    # max (expiry - issued) permitted at gate
+
+      # ---- Internal-only shared secret between the Cloudflare Worker and
+      #      this Render service. The Worker sends this in
+      #      X-QSIM-INTERNAL-TOKEN on every /qsim/kernel/* invocation.
+      #      Rotate at will; use a 64-character hex string (32 bytes). ----
+      - key: QSIM_KERNEL_INTERNAL_TOKEN
+        sync: false                    # secret; set via Render Environment tab
+
+      # ---- Supabase access to chainstate_qsim schema (service-role only). ----
+      #      The kernel writes qir_modules and qsim_jobs rows here; the
+      #      Worker writes qsim_receipts and audit_ledger rows through
+      #      the Durable Object. Both use the same URL + service key.
+      - key: QSIM_SUPABASE_URL
+        sync: false                    # e.g. https://<project>.supabase.co
+      - key: QSIM_SUPABASE_SERVICE_ROLE_KEY
+        sync: false                    # service_role JWT for chainstate_qsim
+
+      # ---- Base mainnet 8453 anchoring ----
+      #      Optional until Phase 3. When absent, receipts still land in
+      #      Supabase with base_tx_hash NULL.
+      - key: QSIM_BASE_RECEIPTS_ADDR
+        sync: false                    # deployed QsimReceipts contract addr
+      - key: QSIM_BASE_RPC_URL
+        sync: false                    # base mainnet 8453 RPC URL
+
+      # ─── END of v0.10.1 CHAINSTATE EDGE QSIM additions ──────────────
